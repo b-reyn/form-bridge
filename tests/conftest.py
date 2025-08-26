@@ -15,8 +15,7 @@ from dataclasses import dataclass
 
 import pytest
 import boto3
-from moto import mock_dynamodb, mock_events, mock_lambda, mock_apigateway, mock_secretsmanager
-from faker import Faker
+from moto import mock_dynamodb2 as mock_dynamodb, mock_events, mock_lambda, mock_apigateway, mock_secretsmanager
 import requests
 from unittest.mock import Mock, patch
 
@@ -24,7 +23,7 @@ from unittest.mock import Mock, patch
 LOCALSTACK_ENDPOINT = os.getenv('LOCALSTACK_ENDPOINT', 'http://localhost:4566')
 AWS_REGION = os.getenv('AWS_DEFAULT_REGION', 'us-east-1')
 
-fake = Faker()
+# fake = Faker()  # Removed for Phase 0
 
 
 @dataclass
@@ -169,13 +168,13 @@ class MultiTenantTestEnvironment:
                 form_id=f"contact_form_{i}",
                 submitted_at=datetime.now(timezone.utc),
                 payload={
-                    "name": fake.name(),
-                    "email": fake.email(),
-                    "message": fake.text(max_nb_chars=200)
+                    "name": "Test User",
+                    "email": "test@example.com",
+                    "message": "This is a test message"
                 },
                 metadata={
-                    "source_ip": fake.ipv4(),
-                    "user_agent": fake.user_agent(),
+                    "source_ip": "192.168.1.100",
+                    "user_agent": "Test-Agent/1.0",
                     "form_version": "1.0"
                 }
             )
@@ -364,15 +363,15 @@ def sample_form_submission():
     return {
         "form_id": "contact_form",
         "payload": {
-            "name": fake.name(),
-            "email": fake.email(),
-            "subject": fake.sentence(),
-            "message": fake.text(max_nb_chars=500)
+            "name": "Test User",
+            "email": "test@example.com",
+            "subject": "Test Subject",
+            "message": "This is a test message for form submission"
         },
         "metadata": {
-            "source_ip": fake.ipv4(),
-            "user_agent": fake.user_agent(),
-            "referrer": fake.url(),
+            "source_ip": "192.168.1.100",
+            "user_agent": "Test-Agent/1.0",
+            "referrer": "https://example.com",
             "timestamp": datetime.now(timezone.utc).isoformat()
         }
     }
