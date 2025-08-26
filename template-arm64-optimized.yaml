@@ -1,0 +1,529 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge ARM64 Optimized Lambda Functions - 20% Cost Savings'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+    
+  SecretPrefix:
+    Type: String
+    Default: formbridge
+    Description: Prefix for tenant secrets in Secrets Manager
+    
+  EventBusName:
+    Type: String
+    Default: form-bridge-bus
+    Description: EventBridge custom bus name
+    
+  DynamoDBTableName:
+    Type: String
+    Default: form-bridge-data
+    Description: DynamoDB table for multi-tenant data
+
+Globals:
+  Function:
+    # ARM64 architecture for 20% cost savings
+    Architectures:
+      - arm64
+    Runtime: python3.12  # Fastest cold start runtime
+    Timeout: 30
+    MemorySize: 512      # Optimized baseline, tune per function
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        SECRET_PREFIX: !Ref SecretPrefix
+        EVENT_BUS_NAME: !Ref EventBusName
+        DYNAMODB_TABLE_NAME: !Ref DynamoDBTableName
+        POWERTOOLS_SERVICE_NAME: formbridge
+        POWERTOOLS_METRICS_NAMESPACE: FormBridge
+        LOG_LEVEL: INFO
+    # Lambda Powertools layer for monitoring
+    Layers:
+      - !Ref MultiTenantSecurityLayer
+      - arn:aws:lambda:us-east-1:017000801446:layer:AWSLambdaPowertoolsPythonV2-Arm64:68
+
+Resources:
+  # ==================================================
+  # Lambda Layers - Shared Dependencies
+  # ==================================================
+  
+  MultiTenantSecurityLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub 'formbridge-mt-security-${Environment}'
+      Description: 'Multi-tenant security utilities for ARM64 Lambda functions'
+      ContentUri: lambdas/layers/mt-security-layer/
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - arm64
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+      BuildArchitecture: arm64
+
+  # ==================================================
+  # Lambda Functions - ARM64 Optimized
+  # ==================================================
+  
+  HMACAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-hmac-authorizer-${Environment}'
+      Description: 'ARM64 optimized HMAC authorizer with multi-tenant caching'
+      CodeUri: lambdas/
+      Handler: optimized-hmac-authorizer.lambda_handler
+      MemorySize: 512  # Optimized for crypto operations
+      Timeout: 10      # Fast authorization response
+      Environment:
+        Variables:
+          SECRET_CACHE_TTL: 300
+          TIMESTAMP_TOLERANCE: 300
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretPrefix}/*'
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: '*'
+      ReservedConcurrencyLimit: 100
+      # Enable AWS X-Ray tracing
+      Tracing: Active
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt AuthorizerDLQ.Arn
+
+  EventProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-event-processor-${Environment}'
+      Description: 'ARM64 optimized event processor with multi-tenant isolation'
+      CodeUri: lambdas/
+      Handler: arm64-event-processor.lambda_handler
+      MemorySize: 768   # Optimized for JSON processing
+      Timeout: 60       # Allow time for DynamoDB operations
+      Environment:
+        Variables:
+          DELIVERY_STATE_MACHINE_ARN: !Ref DeliveryStateMachine
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        MaximumEventAge: 3600
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt ProcessorDLQ.Arn
+      Events:
+        SubmissionReceived:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              source: ['formbridge.ingest']
+              detail-type: ['submission.received']
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:PutItem
+                - dynamodb:GetItem
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+              Resource: 
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}'
+                - !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamoDBTableName}/index/*'
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource: !Ref DeliveryStateMachine
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: '*'
+      ReservedConcurrencyLimit: 200
+      Tracing: Active
+
+  SmartConnectorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-smart-connector-${Environment}'
+      Description: 'ARM64 optimized connector with advanced connection pooling'
+      CodeUri: lambdas/
+      Handler: arm64-smart-connector.lambda_handler
+      MemorySize: 1024  # Higher memory for HTTP operations and transformations
+      Timeout: 120      # Allow time for external API calls
+      Environment:
+        Variables:
+          HTTP_TIMEOUT_SECONDS: 30
+          CIRCUIT_BREAKER_THRESHOLD: 5
+          CONNECTION_POOL_SIZE: 10
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretPrefix}/*'
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: '*'
+      ReservedConcurrencyLimit: 50
+      Tracing: Active
+      DeadLetterQueue:
+        Type: SQS
+        TargetArn: !GetAtt ConnectorDLQ.Arn
+
+  # ==================================================
+  # Step Functions - Delivery Orchestration
+  # ==================================================
+  
+  DeliveryStateMachine:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub 'formbridge-delivery-${Environment}'
+      DefinitionUri: statemachines/delivery-workflow.asl.json
+      DefinitionSubstitutions:
+        SmartConnectorFunctionArn: !GetAtt SmartConnectorFunction.Arn
+        DLQUrl: !Ref DeliveryDLQ
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref SmartConnectorFunction
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt DeliveryDLQ.QueueName
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+      Type: STANDARD
+      Tracing:
+        Enabled: true
+
+  # ==================================================
+  # API Gateway - Multi-Tenant REST API
+  # ==================================================
+  
+  FormBridgeAPI:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'formbridge-api-${Environment}'
+      StageName: !Ref Environment
+      EndpointConfiguration:
+        Type: REGIONAL
+      Auth:
+        DefaultAuthorizer: HMACAuthorizer
+        Authorizers:
+          HMACAuthorizer:
+            FunctionArn: !GetAtt HMACAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - Authorization
+                - X-Tenant-ID
+                - X-Timestamp
+                - X-Signature
+            AuthorizerPayloadFormatVersion: '1.0'
+            EnableSimpleResponses: false
+      TracingEnabled: true
+      AccessLogSetting:
+        DestinationArn: !Sub '${ApiLogGroup.Arn}'
+        Format: >
+          {
+            "requestId": "$context.requestId",
+            "ip": "$context.identity.sourceIp", 
+            "caller": "$context.identity.caller",
+            "user": "$context.identity.user",
+            "requestTime": "$context.requestTime",
+            "httpMethod": "$context.httpMethod",
+            "resourcePath": "$context.resourcePath",
+            "status": "$context.status",
+            "protocol": "$context.protocol",
+            "responseLength": "$context.responseLength",
+            "tenantId": "$context.authorizer.tenant_id",
+            "authDuration": "$context.authorizer.duration_ms"
+          }
+      Cors:
+        AllowMethods: "'OPTIONS,POST,GET'"
+        AllowHeaders: "'Content-Type,Authorization,X-Tenant-ID,X-Timestamp,X-Signature'"
+        AllowOrigin: "'*'"  # Configure appropriately for production
+
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-ingest-${Environment}'
+      Description: 'ARM64 optimized form ingestion endpoint'
+      CodeUri: lambdas/
+      Handler: eventbridge-optimized-publisher.lambda_handler
+      MemorySize: 512
+      Timeout: 30
+      Environment:
+        Variables:
+          S3_BUCKET_NAME: !Ref PayloadBucket
+      Events:
+        IngestAPI:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FormBridgeAPI
+            Path: /submit
+            Method: POST
+            Auth:
+              Authorizer: HMACAuthorizer
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}'
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+                - s3:PutObjectTagging
+              Resource: !Sub '${PayloadBucket.Arn}/*'
+            - Effect: Allow
+              Action:
+                - cloudwatch:PutMetricData
+              Resource: '*'
+      ReservedConcurrencyLimit: 300
+      Tracing: Active
+
+  # ==================================================
+  # EventBridge - Multi-Tenant Event Bus
+  # ==================================================
+  
+  FormBridgeEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Ref EventBusName
+      EventSourceName: formbridge
+
+  # ==================================================
+  # DynamoDB - Multi-Tenant Data Store  
+  # ==================================================
+  
+  MultiTenantDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref DynamoDBTableName
+      BillingMode: ON_DEMAND  # Cost-optimized for variable workloads
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK  
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      SSESpecification:
+        SSEEnabled: true
+        KMSMasterKeyId: alias/aws/dynamodb
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: FormBridge
+
+  # ==================================================
+  # S3 - Large Payload Storage
+  # ==================================================
+  
+  PayloadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'formbridge-payloads-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldPayloads
+            Status: Enabled
+            ExpirationInDays: 30
+            NoncurrentVersionExpirationInDays: 7
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !GetAtt EventProcessorFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: submissions/
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: FormBridge
+
+  # ==================================================
+  # Dead Letter Queues and Error Handling
+  # ==================================================
+  
+  AuthorizerDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'formbridge-authorizer-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 60
+      KmsMasterKeyId: alias/aws/sqs
+
+  ProcessorDLQ:
+    Type: AWS::SQS::Queue  
+    Properties:
+      QueueName: !Sub 'formbridge-processor-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 300
+      KmsMasterKeyId: alias/aws/sqs
+
+  ConnectorDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'formbridge-connector-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 120
+      KmsMasterKeyId: alias/aws/sqs
+
+  DeliveryDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'formbridge-delivery-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+      VisibilityTimeoutSeconds: 300
+      KmsMasterKeyId: alias/aws/sqs
+
+  # ==================================================
+  # CloudWatch Logs and Monitoring
+  # ==================================================
+  
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/apigateway/formbridge-${Environment}'
+      RetentionInDays: 30
+
+  # ==================================================
+  # IAM Roles and Policies
+  # ==================================================
+  
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: EventBridgeExecutionPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource:
+                  - !GetAtt EventProcessorFunction.Arn
+                  - !GetAtt SmartConnectorFunction.Arn
+
+# ==================================================
+# Outputs - ARM64 Deployment Information
+# ==================================================
+
+Outputs:
+  ApiGatewayEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${FormBridgeAPI}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+
+  EventBusArn:
+    Description: 'EventBridge custom bus ARN'
+    Value: !GetAtt FormBridgeEventBus.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-EventBusArn'
+
+  DynamoDBTableName:
+    Description: 'DynamoDB table name for multi-tenant data'
+    Value: !Ref MultiTenantDataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DynamoTable'
+
+  PayloadBucketName:
+    Description: 'S3 bucket for large payload storage'
+    Value: !Ref PayloadBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-PayloadBucket'
+
+  ARM64OptimizationInfo:
+    Description: 'ARM64 architecture optimization details'
+    Value: !Sub |
+      All Lambda functions deployed with ARM64 architecture for:
+      - 20% cost reduction on duration charges
+      - Up to 19% better performance
+      - 60% less energy consumption
+      - Runtime: Python 3.12 for fastest cold starts
+      - Memory optimized per function type
+      - Connection pooling for external services
+
+  SecurityLayerArn:
+    Description: 'Multi-tenant security layer ARN'
+    Value: !Ref MultiTenantSecurityLayer
+    Export:
+      Name: !Sub '${AWS::StackName}-SecurityLayer'
+
+  DeliveryStateMachineArn:
+    Description: 'Step Functions state machine for delivery orchestration'
+    Value: !Ref DeliveryStateMachine
+    Export:
+      Name: !Sub '${AWS::StackName}-DeliveryStateMachine'
