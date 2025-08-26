@@ -109,8 +109,18 @@ jobs:
           DEPLOYMENT_BUCKET="formbridge-deployment-$AWS_ACCOUNT_ID"
           echo "Target deployment bucket: $DEPLOYMENT_BUCKET"
           
-          if ! aws cloudformation describe-stacks --stack-name formbridge-deployment-bucket &> /dev/null; then
-            echo "Deploying deployment bucket stack..."
+          # Check if stack exists and its status
+          STACK_STATUS=$(aws cloudformation describe-stacks --stack-name formbridge-deployment-bucket --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo "NOT_EXISTS")
+          
+          if [ "$STACK_STATUS" = "ROLLBACK_COMPLETE" ]; then
+            echo "Previous stack creation failed, deleting and recreating..."
+            aws cloudformation delete-stack --stack-name formbridge-deployment-bucket
+            aws cloudformation wait stack-delete-complete --stack-name formbridge-deployment-bucket
+            STACK_STATUS="NOT_EXISTS"
+          fi
+          
+          if [ "$STACK_STATUS" = "NOT_EXISTS" ]; then
+            echo "Creating deployment bucket stack..."
             aws cloudformation create-stack \
               --stack-name formbridge-deployment-bucket \
               --template-body file://infrastructure/deployment-bucket.yaml \
@@ -121,7 +131,7 @@ jobs:
               --stack-name formbridge-deployment-bucket
             echo "Deployment bucket stack created successfully"
           else
-            echo "Deployment bucket stack already exists"
+            echo "Deployment bucket stack exists with status: $STACK_STATUS"
           fi
           
           # Verify bucket exists
