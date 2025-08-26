@@ -112,19 +112,27 @@ jobs:
             
             aws cloudformation wait stack-create-complete \
               --stack-name formbridge-github-oidc
+          else
+            echo "OIDC provider stack already exists, skipping..."
           fi
           
           # Deploy deployment bucket if not exists
           DEPLOYMENT_BUCKET="formbridge-deployment-${{ secrets.AWS_ACCOUNT_ID }}"
-          if ! aws s3 ls s3://$DEPLOYMENT_BUCKET &> /dev/null; then
+          if ! aws cloudformation describe-stacks --stack-name formbridge-deployment-bucket &> /dev/null; then
             echo "Deploying deployment bucket stack..."
-            aws cloudformation create-stack \
+            if aws cloudformation create-stack \
               --stack-name formbridge-deployment-bucket \
               --template-body file://infrastructure/deployment-bucket.yaml \
-              --tags Key=Application,Value=FormBridge Key=Environment,Value=${{ needs.validate.outputs.environment }}
-            
-            aws cloudformation wait stack-create-complete \
-              --stack-name formbridge-deployment-bucket
+              --tags Key=Application,Value=FormBridge Key=Environment,Value=${{ needs.validate.outputs.environment }}; then
+              echo "Stack creation initiated, waiting for completion..."
+              aws cloudformation wait stack-create-complete \
+                --stack-name formbridge-deployment-bucket
+            else
+              echo "Stack may already exist, checking status..."
+              aws cloudformation describe-stacks --stack-name formbridge-deployment-bucket || true
+            fi
+          else
+            echo "Deployment bucket stack already exists, skipping..."
           fi
           
       - name: Validate SAM template
