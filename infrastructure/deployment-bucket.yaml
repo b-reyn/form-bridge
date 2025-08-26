@@ -55,8 +55,7 @@ Resources:
         Rules:
           - Id: DeleteOldLogs
             Status: Enabled
-            Expiration:
-              Days: 14
+            ExpirationInDays: 14
 
   DeploymentBucketPolicy:
     Type: AWS::S3::BucketPolicy
