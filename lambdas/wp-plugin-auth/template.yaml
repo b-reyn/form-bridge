@@ -1,0 +1,431 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge WordPress Plugin Authentication System'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+  
+  ApiDomain:
+    Type: String
+    Default: api.form-bridge.com
+    Description: API Gateway custom domain
+  
+  PluginBucket:
+    Type: String
+    Default: form-bridge-plugin-releases
+    Description: S3 bucket for plugin releases
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: python3.12
+    Architectures:
+      - arm64  # 20% cost savings with Graviton2
+    Environment:
+      Variables:
+        TABLE_NAME: !Ref PluginAuthTable
+        ENVIRONMENT: !Ref Environment
+        API_DOMAIN: !Ref ApiDomain
+        PLUGIN_BUCKET: !Ref PluginBucket
+        SIGNING_SECRET_NAME: !Sub 'form-bridge/${Environment}/plugin-signing-key'
+    Layers:
+      - !Ref DependencyLayer
+    Tracing: Active
+
+Resources:
+  # DynamoDB Table
+  PluginAuthTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'form-bridge-plugin-auth-${Environment}'
+      BillingMode: ON_DEMAND
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      StreamSpecification:
+        StreamViewType: NEW_AND_OLD_IMAGES
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: form-bridge
+
+  # Lambda Layer for Dependencies
+  DependencyLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub 'form-bridge-plugin-deps-${Environment}'
+      Description: 'Dependencies for Form-Bridge Plugin Authentication'
+      ContentUri: layers/dependencies/
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - arm64
+      RetentionPolicy: Retain
+
+  # API Gateway
+  PluginAuthApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub 'form-bridge-plugin-auth-${Environment}'
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Timestamp,X-Signature'"
+        AllowOrigin: "'*'"
+        MaxAge: "'86400'"
+      TracingEnabled: true
+      MethodSettings:
+        - ResourcePath: '/*'
+          HttpMethod: '*'
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+          ThrottlingBurstLimit: 100
+          ThrottlingRateLimit: 50
+      Auth:
+        DefaultAuthorizer: PluginAuthorizer
+        Authorizers:
+          PluginAuthorizer:
+            FunctionArn: !GetAtt AuthenticationFunction.Arn
+            AuthorizerPayloadFormatVersion: '1.0'
+            FunctionInvokeRole: !GetAtt AuthorizerInvokeRole.Arn
+
+  # Lambda Functions
+  InitialRegistrationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-plugin-registration-${Environment}'
+      CodeUri: ./
+      Handler: initial_registration.lambda_handler
+      Description: 'Handle initial WordPress plugin registration'
+      Environment:
+        Variables:
+          MAX_REGISTRATIONS_PER_IP: '3'
+          RATE_LIMIT_WINDOW: '300'
+          TEMP_KEY_EXPIRY: '3600'
+      Events:
+        RegisterSite:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PluginAuthApi
+            Path: /register
+            Method: post
+            Auth:
+              Authorizer: NONE  # No auth required for registration
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PluginAuthTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  KeyExchangeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-plugin-key-exchange-${Environment}'
+      CodeUri: ./
+      Handler: key_exchange.lambda_handler
+      Description: 'Exchange temporary key for permanent credentials'
+      Timeout: 45  # Longer timeout for site verification
+      Events:
+        ExchangeKey:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PluginAuthApi
+            Path: /exchange
+            Method: post
+            Auth:
+              Authorizer: NONE  # Uses temp key validation
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PluginAuthTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  AuthenticationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-plugin-auth-${Environment}'
+      CodeUri: ./
+      Handler: authentication.lambda_handler
+      Description: 'API Gateway Custom Authorizer'
+      Timeout: 15  # Quick auth checks
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PluginAuthTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  UpdateCheckFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-plugin-update-check-${Environment}'
+      CodeUri: ./
+      Handler: update_check.lambda_handler
+      Description: 'Check for plugin updates and provide secure downloads'
+      Environment:
+        Variables:
+          UPDATE_CHECK_CACHE_TTL: '3600'
+      Events:
+        CheckUpdates:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PluginAuthApi
+            Path: /updates/check
+            Method: get
+            Auth:
+              Authorizer: NONE  # Allow anonymous update checks
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PluginAuthTable
+        - S3ReadPolicy:
+            BucketName: !Ref PluginBucket
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:form-bridge/${Environment}/plugin-signing-key*'
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  SiteValidationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-plugin-validation-${Environment}'
+      CodeUri: ./
+      Handler: site_validation.lambda_handler
+      Description: 'Validate WordPress sites and detect abuse'
+      Timeout: 60  # Longer timeout for site validation
+      MemorySize: 1024  # More memory for DNS/HTTP operations
+      Environment:
+        Variables:
+          VALIDATION_CACHE_TTL: '86400'
+      Events:
+        ValidateSite:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PluginAuthApi
+            Path: /validate
+            Method: post
+            Auth:
+              Authorizer: NONE  # Internal validation endpoint
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PluginAuthTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: '*'
+
+  # IAM Roles
+  AuthorizerInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: apigateway.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AuthorizerInvokePolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !GetAtt AuthenticationFunction.Arn
+
+  # S3 Bucket for Plugin Releases
+  PluginReleasesBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub '${PluginBucket}-${Environment}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 30
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: form-bridge
+
+  # Secrets for Plugin Signing
+  PluginSigningSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'form-bridge/${Environment}/plugin-signing-key'
+      Description: 'Signing key for plugin distribution'
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: 'key'
+        PasswordLength: 64
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: form-bridge
+
+  # CloudWatch Log Groups (with retention)
+  RegistrationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-plugin-registration-${Environment}'
+      RetentionInDays: 30
+
+  KeyExchangeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-plugin-key-exchange-${Environment}'
+      RetentionInDays: 30
+
+  AuthenticationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-plugin-auth-${Environment}'
+      RetentionInDays: 7  # Shorter retention for frequent auth logs
+
+  UpdateCheckLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-plugin-update-check-${Environment}'
+      RetentionInDays: 14
+
+  ValidationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-plugin-validation-${Environment}'
+      RetentionInDays: 30
+
+  # CloudWatch Alarms
+  HighErrorRateAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'form-bridge-plugin-high-error-rate-${Environment}'
+      AlarmDescription: 'High error rate in plugin authentication'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AuthenticationFunction
+      TreatMissingData: notBreaching
+
+  HighLatencyAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'form-bridge-plugin-high-latency-${Environment}'
+      AlarmDescription: 'High latency in plugin authentication'
+      MetricName: Duration
+      Namespace: AWS/Lambda
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5000  # 5 seconds
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref AuthenticationFunction
+      TreatMissingData: notBreaching
+
+Outputs:
+  ApiGatewayUrl:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${PluginAuthApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiUrl'
+
+  TableName:
+    Description: 'DynamoDB table name'
+    Value: !Ref PluginAuthTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TableName'
+
+  PluginBucketName:
+    Description: 'S3 bucket for plugin releases'
+    Value: !Ref PluginReleasesBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-PluginBucket'
+
+  SigningSecretArn:
+    Description: 'ARN of plugin signing secret'
+    Value: !Ref PluginSigningSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-SigningSecret'

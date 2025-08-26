@@ -1,0 +1,209 @@
+version: '3.8'
+
+services:
+  # LocalStack for AWS service mocking
+  localstack:
+    image: localstack/localstack:3.0
+    container_name: formbridge-localstack
+    ports:
+      - "4566:4566"          # LocalStack edge port
+      - "4510-4559:4510-4559" # External service port range
+    environment:
+      # Enable only the services we need for Form-Bridge
+      - SERVICES=dynamodb,lambda,events,apigateway,secretsmanager,logs,iam,sts
+      - DEBUG=1
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - PERSISTENCE=1
+      - LAMBDA_EXECUTOR=docker
+      - LAMBDA_RUNTIME_ENVIRONMENT_TIMEOUT=30
+      # Multi-tenant testing configuration
+      - DISABLE_CORS_CHECKS=1
+      - SKIP_SSL_CERT_DOWNLOAD=1
+      - LOCALSTACK_API_KEY=${LOCALSTACK_API_KEY:-}
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./tests/localstack-data:/var/lib/localstack"
+      - "./lambdas:/var/lib/localstack/lambda-stores"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # DynamoDB Admin interface for debugging
+  dynamodb-admin:
+    image: aaronshaf/dynamodb-admin:latest
+    container_name: formbridge-dynamodb-admin
+    ports:
+      - "8001:8001"
+    environment:
+      - DYNAMO_ENDPOINT=http://localstack:4566
+      - AWS_REGION=us-east-1
+    depends_on:
+      localstack:
+        condition: service_healthy
+
+  # Python test runner with all dependencies
+  tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: formbridge-tests
+    volumes:
+      - "./tests:/app/tests"
+      - "./lambdas:/app/lambdas"
+      - "./scripts:/app/scripts"
+      - "./test-results:/app/test-results"
+    environment:
+      # AWS LocalStack configuration
+      - AWS_ACCESS_KEY_ID=test
+      - AWS_SECRET_ACCESS_KEY=test
+      - AWS_DEFAULT_REGION=us-east-1
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - LOCALSTACK_ENDPOINT=http://localstack:4566
+      
+      # Form-Bridge specific configuration
+      - FORMBRIDGE_ENV=test
+      - FORMBRIDGE_TABLE_NAME=formbridge-test
+      - FORMBRIDGE_EVENT_BUS_NAME=formbridge-test-bus
+      
+      # Multi-tenant test configuration
+      - TEST_TENANT_1_ID=t_test_tenant_1
+      - TEST_TENANT_2_ID=t_test_tenant_2
+      - TEST_TENANT_3_ID=t_test_tenant_3
+      
+      # Performance testing configuration
+      - LOAD_TEST_TARGET_RPS=100
+      - LOAD_TEST_DURATION=300
+      - PERFORMANCE_BASELINE_FILE=/app/test-results/performance-baseline.json
+      
+      # Security testing configuration
+      - SECURITY_SCAN_ENABLED=true
+      - VULNERABILITY_THRESHOLD=high
+    depends_on:
+      localstack:
+        condition: service_healthy
+    command: >
+      bash -c "
+        echo 'Waiting for LocalStack to be ready...' &&
+        sleep 10 &&
+        echo 'Setting up test infrastructure...' &&
+        python scripts/setup-test-infrastructure.py &&
+        echo 'Running test suite...' &&
+        pytest tests/ -v 
+          --cov=lambdas 
+          --cov-report=html:/app/test-results/coverage-html
+          --cov-report=xml:/app/test-results/coverage.xml
+          --cov-report=term-missing
+          --cov-fail-under=90
+          --junit-xml=/app/test-results/junit.xml
+          --html=/app/test-results/report.html
+          --self-contained-html
+      "
+
+  # k6 Load testing service
+  k6-load-tests:
+    image: grafana/k6:latest
+    container_name: formbridge-k6-tests
+    volumes:
+      - "./tests/load:/scripts"
+      - "./test-results:/results"
+    environment:
+      - API_ENDPOINT=http://localstack:4566
+      - K6_OUT=json=/results/load-test-results.json
+    depends_on:
+      localstack:
+        condition: service_healthy
+    profiles:
+      - load-testing
+    command: run /scripts/form-submission-load-test.js
+
+  # Playwright E2E testing service
+  playwright-tests:
+    build:
+      context: .
+      dockerfile: Dockerfile.playwright
+    container_name: formbridge-playwright-tests
+    volumes:
+      - "./tests/e2e:/app/tests"
+      - "./test-results/playwright:/app/test-results"
+    environment:
+      - BASE_URL=http://localstack:4566
+      - HEADLESS=true
+      - BROWSER=chromium,webkit,firefox
+    depends_on:
+      localstack:
+        condition: service_healthy
+    profiles:
+      - e2e-testing
+    command: >
+      bash -c "
+        npx playwright install &&
+        npx playwright test 
+          --reporter=html:/app/test-results/playwright-report
+          --output-dir=/app/test-results/test-output
+      "
+
+  # WordPress testing environment
+  wordpress:
+    image: wordpress:6.4-php8.1
+    container_name: formbridge-wordpress
+    ports:
+      - "8080:80"
+    environment:
+      - WORDPRESS_DB_HOST=mysql
+      - WORDPRESS_DB_USER=wordpress
+      - WORDPRESS_DB_PASSWORD=wordpress
+      - WORDPRESS_DB_NAME=wordpress
+      - WORDPRESS_DEBUG=1
+    volumes:
+      - "./tests/wordpress/plugins:/var/www/html/wp-content/plugins"
+      - "./tests/wordpress/themes:/var/www/html/wp-content/themes"
+    depends_on:
+      - mysql
+    profiles:
+      - wordpress-testing
+
+  # MySQL for WordPress testing
+  mysql:
+    image: mysql:8.0
+    container_name: formbridge-mysql
+    environment:
+      - MYSQL_ROOT_PASSWORD=rootpassword
+      - MYSQL_DATABASE=wordpress
+      - MYSQL_USER=wordpress
+      - MYSQL_PASSWORD=wordpress
+    volumes:
+      - mysql_data:/var/lib/mysql
+    profiles:
+      - wordpress-testing
+
+  # Security scanning service
+  security-scanner:
+    build:
+      context: .
+      dockerfile: Dockerfile.security
+    container_name: formbridge-security-scanner
+    volumes:
+      - "./lambdas:/app/code"
+      - "./test-results/security:/app/results"
+      - "./requirements.txt:/app/requirements.txt"
+    command: >
+      bash -c "
+        echo 'Running security scans...' &&
+        bandit -r /app/code -f json -o /app/results/bandit-report.json || true &&
+        safety check --json --output /app/results/safety-report.json || true &&
+        semgrep --config=auto /app/code --json --output=/app/results/semgrep-report.json || true &&
+        echo 'Security scan completed. Check results in test-results/security/'
+      "
+    profiles:
+      - security-testing
+
+volumes:
+  mysql_data:
+  localstack_data:
+
+networks:
+  default:
+    name: formbridge-test-network

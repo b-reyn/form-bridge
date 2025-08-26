@@ -1,0 +1,290 @@
+{
+  "cloudwatch_metric_math_expressions": {
+    "description": "Metric math expressions for Form-Bridge security monitoring",
+    
+    "authentication_health_score": {
+      "expression": "100 * (m1 / (m1 + m2))",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "AuthenticationSuccess"],
+          "stat": "Sum",
+          "period": 300
+        },
+        {
+          "id": "m2", 
+          "metric": ["FormBridge/Security", "AuthenticationFailure"],
+          "stat": "Sum",
+          "period": 300
+        }
+      ],
+      "label": "Authentication Success Rate %",
+      "alarm_threshold": {
+        "comparison": "LessThanThreshold",
+        "threshold": 95,
+        "evaluation_periods": 2
+      }
+    },
+    
+    "threat_velocity": {
+      "expression": "RATE(m1)",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "SecurityAlerts"],
+          "stat": "Sum",
+          "period": 300
+        }
+      ],
+      "label": "Security Alerts per Second",
+      "alarm_threshold": {
+        "comparison": "GreaterThanThreshold", 
+        "threshold": 0.1,
+        "evaluation_periods": 3
+      }
+    },
+    
+    "geographic_threat_concentration": {
+      "expression": "m1 / m2 * 100",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "HighRiskCountryAccess"],
+          "stat": "Sum",
+          "period": 3600
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "TotalAccessAttempts"],
+          "stat": "Sum", 
+          "period": 3600
+        }
+      ],
+      "label": "High Risk Geographic Access %",
+      "alarm_threshold": {
+        "comparison": "GreaterThanThreshold",
+        "threshold": 25,
+        "evaluation_periods": 1
+      }
+    },
+    
+    "tenant_compromise_indicator": {
+      "expression": "IF(m1 > 50 AND m2 > 3, 100, IF(m1 > 20 AND m2 > 1, 75, IF(m1 > 10, 50, 0)))",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "AuthFailuresPerTenant"],
+          "stat": "Maximum",
+          "period": 300
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "UniqueAttackIPs"],
+          "stat": "Maximum", 
+          "period": 300
+        }
+      ],
+      "label": "Tenant Compromise Risk Score",
+      "alarm_threshold": {
+        "comparison": "GreaterThanThreshold",
+        "threshold": 75,
+        "evaluation_periods": 1
+      }
+    },
+    
+    "key_rotation_compliance": {
+      "expression": "m1 / m2 * 100",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "TenantsWithRotatedKeys"],
+          "stat": "Maximum",
+          "period": 86400
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "TotalActiveTenants"],
+          "stat": "Maximum",
+          "period": 86400
+        }
+      ],
+      "label": "Key Rotation Compliance %",
+      "alarm_threshold": {
+        "comparison": "LessThanThreshold",
+        "threshold": 90,
+        "evaluation_periods": 1
+      }
+    },
+    
+    "update_deployment_health": {
+      "expression": "100 * m1 / (m1 + m2)",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Updates", "SuccessfulDeployments"],
+          "stat": "Sum",
+          "period": 3600
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Updates", "FailedDeployments"],
+          "stat": "Sum",
+          "period": 3600
+        }
+      ],
+      "label": "Update Success Rate %",
+      "alarm_threshold": {
+        "comparison": "LessThanThreshold",
+        "threshold": 90,
+        "evaluation_periods": 2
+      }
+    },
+    
+    "anomaly_detection_effectiveness": {
+      "expression": "(m1 - m2) / m1 * 100",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "TotalAlertsGenerated"],
+          "stat": "Sum",
+          "period": 3600
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "FalsePositiveAlerts"],
+          "stat": "Sum",
+          "period": 3600
+        }
+      ],
+      "label": "True Positive Rate %",
+      "target_threshold": ">= 85"
+    },
+    
+    "mean_time_to_detection": {
+      "expression": "m1 / m2",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "TotalDetectionTime"],
+          "stat": "Sum",
+          "period": 3600
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "SecurityIncidentCount"],
+          "stat": "Sum",
+          "period": 3600
+        }
+      ],
+      "label": "Mean Time to Detection (seconds)",
+      "alarm_threshold": {
+        "comparison": "GreaterThanThreshold",
+        "threshold": 300,
+        "evaluation_periods": 2
+      }
+    },
+    
+    "security_cost_efficiency": {
+      "expression": "m1 / (m2 + 0.01)",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "ThreatsDetected"],
+          "stat": "Sum",
+          "period": 86400
+        },
+        {
+          "id": "m2",
+          "metric": ["AWS/Billing", "EstimatedCharges"],
+          "stat": "Maximum",
+          "period": 86400,
+          "dimensions": [
+            {"Name": "ServiceName", "Value": "CloudWatch"},
+            {"Name": "Currency", "Value": "USD"}
+          ]
+        }
+      ],
+      "label": "Threats Detected per Dollar Spent"
+    },
+    
+    "credential_stuffing_detection": {
+      "expression": "IF(m1 > 5 AND m2 > 20, 1, 0)",
+      "metrics": [
+        {
+          "id": "m1",
+          "metric": ["FormBridge/Security", "UniqueTenantsAttacked"],
+          "stat": "Maximum",
+          "period": 900
+        },
+        {
+          "id": "m2",
+          "metric": ["FormBridge/Security", "FailuresFromSingleIP"],
+          "stat": "Maximum",
+          "period": 900
+        }
+      ],
+      "label": "Credential Stuffing Attack Detected",
+      "alarm_threshold": {
+        "comparison": "GreaterThanThreshold",
+        "threshold": 0,
+        "evaluation_periods": 1
+      }
+    }
+  },
+  
+  "composite_alarms": {
+    "security_incident_composite": {
+      "alarm_rule": "(ALARM \"FormBridge-HighAuthenticationFailureRate\" OR ALARM \"FormBridge-UnusualVolumeSpike\") AND ALARM \"FormBridge-CriticalSecurityEvent\"",
+      "actions_enabled": true,
+      "alarm_actions": [
+        "arn:aws:sns:us-east-1:123456789012:security-incidents-composite"
+      ],
+      "alarm_description": "Composite alarm for multi-signal security incidents"
+    },
+    
+    "tenant_compromise_composite": {
+      "alarm_rule": "ALARM \"FormBridge-TenantCompromiseIndicator\" AND (ALARM \"FormBridge-GeographicAnomaly\" OR ALARM \"FormBridge-PayloadAnomalyDetected\")",
+      "actions_enabled": true,
+      "alarm_actions": [
+        "arn:aws:sns:us-east-1:123456789012:tenant-compromise-alerts"
+      ],
+      "alarm_description": "Multi-factor tenant compromise detection"
+    }
+  },
+  
+  "anomaly_detectors": {
+    "authentication_pattern_anomaly": {
+      "metric_name": "AuthenticationSuccess",
+      "namespace": "FormBridge/Security", 
+      "stat": "Average",
+      "dimensions": [
+        {"Name": "TenantId", "Value": "*"}
+      ],
+      "anomaly_threshold": 2
+    },
+    
+    "submission_volume_anomaly": {
+      "metric_name": "SubmissionVolume",
+      "namespace": "FormBridge/Application",
+      "stat": "Sum",
+      "dimensions": [
+        {"Name": "TenantId", "Value": "*"}
+      ],
+      "anomaly_threshold": 3
+    }
+  },
+  
+  "insights_queries": {
+    "security_investigation_queries": {
+      "failed_auth_investigation": "fields @timestamp, tenant_id, ip_address, event_type, user_agent | filter event_type = \"authentication_failure\" | stats count() as failure_count by ip_address, tenant_id | sort failure_count desc | limit 20",
+      
+      "geographic_anomaly_analysis": "fields @timestamp, tenant_id, ip_address, user_context.geographic_location.country | filter event_type = \"geographic_anomaly\" | stats count() as anomaly_count, count_distinct(ip_address) as unique_ips by tenant_id, user_context.geographic_location.country | sort anomaly_count desc",
+      
+      "credential_stuffing_detection": "fields @timestamp, ip_address, tenant_id | filter event_type = \"authentication_failure\" and @timestamp > date_sub(now(), interval 1 hour) | stats count() as attempts, count_distinct(tenant_id) as unique_tenants by ip_address | filter unique_tenants >= 3 and attempts >= 15 | sort attempts desc",
+      
+      "payload_anomaly_timeline": "fields @timestamp, tenant_id, payload_size, form_id | filter event_type = \"payload_anomaly\" | sort @timestamp desc | limit 100",
+      
+      "update_tampering_investigation": "fields @timestamp, tenant_id, update_source, update_version, error_message | filter event_type like \"update_\" and (update_source != \"official\" or isPresent(error_message)) | sort @timestamp desc"
+    }
+  }
+}

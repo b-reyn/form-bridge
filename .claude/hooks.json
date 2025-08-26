@@ -1,0 +1,114 @@
+{
+  "preToolUse": {
+    "rules": [
+      {
+        "description": "Block sensitive file edits",
+        "tool": "Edit",
+        "pattern": "^\\.env$|secrets|credentials|private.*key|\\.pem$",
+        "action": "deny",
+        "message": "🔒 BLOCKED: Cannot edit sensitive files. Use secure configuration scripts."
+      },
+      {
+        "description": "Warn on infrastructure changes",
+        "tool": "Edit",
+        "pattern": "cloudformation\\.yaml|infrastructure/|\\.yml$",
+        "action": "warn",
+        "message": "⚠️ Infrastructure change - requires security review and validation"
+      },
+      {
+        "description": "Block dangerous commands",
+        "tool": "Bash",
+        "pattern": "rm -rf /|sudo|chmod 777|curl.*\\|.*bash|wget.*\\|.*sh",
+        "action": "deny",
+        "message": "🔒 BLOCKED: Dangerous command detected. Use safe alternatives."
+      },
+      {
+        "description": "Require approval for package changes",
+        "tool": "Edit",
+        "pattern": "package\\.json|package-lock\\.json|yarn\\.lock",
+        "action": "warn",
+        "message": "⚠️ Package changes detected - run npm audit after changes"
+      },
+      {
+        "description": "Block secret environment edits",
+        "tool": "Write",
+        "pattern": "\\.env|\\.env\\..*|secrets",
+        "action": "deny",
+        "message": "🔒 BLOCKED: Use environment setup scripts, not direct file edits"
+      }
+    ]
+  },
+  "postToolUse": {
+    "rules": [
+      {
+        "description": "Auto-format TypeScript files",
+        "tool": "Edit",
+        "pattern": "\\.(ts|tsx)$",
+        "command": "docker compose exec app npm run lint:fix -- $FILE 2>/dev/null || true"
+      },
+      {
+        "description": "Run tests for test files",
+        "tool": "Edit",
+        "pattern": "\\.test\\.(ts|tsx)$",
+        "command": "docker compose exec app npm test -- $FILE --passWithNoTests 2>/dev/null || true"
+      },
+      {
+        "description": "Validate CloudFormation templates",
+        "tool": "Edit",
+        "pattern": "cloudformation\\.yaml",
+        "command": "docker compose exec app aws cloudformation validate-template --template-body file://infrastructure/cloudformation.yaml 2>/dev/null || echo 'CloudFormation validation failed - check template'"
+      },
+      {
+        "description": "Security audit after package changes",
+        "tool": "Edit",
+        "pattern": "package\\.json",
+        "command": "docker compose exec app npm audit --audit-level=moderate 2>/dev/null || echo 'Security vulnerabilities found - run npm audit for details'"
+      }
+    ]
+  },
+  "sessionStart": {
+    "commands": [
+      "echo '🚀 Multi-Provider Static Site Template (Production-Ready)'",
+      "echo 'Security: Enabled | Docker: Required | Agents: 8 Available'",
+      "echo ''",
+      "echo 'Current provider:' && (cat .env 2>/dev/null | grep DEPLOYMENT_PROVIDER || echo 'Not configured - run /setup')",
+      "echo ''",
+      "git status --short 2>/dev/null || echo 'Git status unavailable'",
+      "echo ''",
+      "echo 'Quick commands: /setup | /deploy | /review | /switch-provider'"
+    ]
+  },
+  "preCompact": {
+    "action": "summarize",
+    "updateFiles": ["CLAUDE.md", "README.md"],
+    "message": "Session compacting - key decisions and changes will be summarized"
+  },
+  "security": {
+    "auditLog": true,
+    "sensitivePatterns": [
+      "password",
+      "secret",
+      "token",
+      "key",
+      "credential",
+      "private"
+    ],
+    "blockedOperations": [
+      "rm -rf /",
+      "chmod 777",
+      "sudo rm",
+      "git push --force"
+    ]
+  },
+  "compliance": {
+    "requireHttps": true,
+    "blockPublicS3": true,
+    "enforceTestCoverage": 70,
+    "maxBundleSize": "2MB",
+    "requiredSecurityHeaders": [
+      "Content-Security-Policy",
+      "X-Frame-Options",
+      "X-Content-Type-Options"
+    ]
+  }
+}

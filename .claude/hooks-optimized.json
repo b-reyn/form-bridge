@@ -1,0 +1,350 @@
+{
+  "hooks": [
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|MultiEdit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Block sensitive file modifications",
+          "command": "python3 -c \"import json, sys; data=json.load(sys.stdin); path=data.get('tool_input',{}).get('file_path',''); forbidden=['.env', 'secrets', 'credentials', '.pem', 'private_key']; sys.exit(2 if any(f in path.lower() for f in forbidden) else 0)\"",
+          "stopOnError": true
+        }
+      ]
+    },
+    {
+      "event": "PreToolUse", 
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Validate Lambda function modifications",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]]; then python3 -m py_compile \"$CLAUDE_FILE_PATH\" 2>/dev/null || echo '⚠️ Python syntax error detected'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Block dangerous commands",
+          "command": "python3 -c \"import json, sys, re; data=json.load(sys.stdin); cmd=data.get('tool_input',{}).get('command',''); dangerous=['rm -rf /', 'sudo rm', 'chmod 777', 'curl.*\\|.*bash', 'wget.*\\|.*sh']; sys.exit(2 if any(re.search(d, cmd) for d in dangerous) else 0)\""
+        }
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Enforce multi-tenant key prefixing in DynamoDB operations",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]] && grep -q 'dynamodb\\|table\\|put_item\\|get_item' \"$CLAUDE_FILE_PATH\"; then grep -q 'TENANT#' \"$CLAUDE_FILE_PATH\" || echo '⚠️ WARNING: DynamoDB operation without TENANT# prefix detected'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Auto-format Python Lambda functions",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]]; then black \"$CLAUDE_FILE_PATH\" 2>/dev/null && echo '✅ Python formatted' || true; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Validate CloudFormation/SAM templates",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ \\.(yaml|yml)$ ]] && grep -q 'AWSTemplateFormatVersion' \"$CLAUDE_FILE_PATH\"; then cfn-lint \"$CLAUDE_FILE_PATH\" 2>/dev/null || echo '⚠️ CloudFormation validation issues detected'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Run Lambda function unit tests",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]] && [[ -f \"${CLAUDE_FILE_PATH%.py}_test.py\" ]]; then pytest \"${CLAUDE_FILE_PATH%.py}_test.py\" -v 2>/dev/null || echo '⚠️ Tests failing'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Check Lambda function complexity",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]]; then radon cc \"$CLAUDE_FILE_PATH\" -s -n C 2>/dev/null | grep -E '^[[:space:]]*[MF]' && echo '⚠️ High complexity detected - consider refactoring' || true; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Security scan Python dependencies",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" == *requirements.txt ]]; then safety check -r \"$CLAUDE_FILE_PATH\" 2>/dev/null || echo '⚠️ Security vulnerabilities in dependencies'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Estimate AWS costs for infrastructure changes",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ template\\.(yaml|yml)$ ]]; then echo '💰 Cost Impact: Run \"sam deploy --no-execute-changeset\" to preview cost changes'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Generate API documentation reminder",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ api/.*\\.py$ ]] || [[ \"$CLAUDE_FILE_PATH\" =~ template\\.yaml$ ]]; then echo '📚 Remember to update API documentation in /docs/api/'; fi"
+        }
+      ]
+    },
+    {
+      "event": "SessionStart",
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Initialize Form-Bridge development environment",
+          "command": "echo '🚀 Form-Bridge Multi-Tenant Serverless System' && echo '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━' && echo 'Architecture: EventBridge-Centric (Option A)' && echo 'Stack: Lambda | EventBridge | DynamoDB | Step Functions' && echo '' && echo 'Recent Activity:' && git log --oneline -3 2>/dev/null || echo 'Git not initialized' && echo '' && echo 'Quick Commands: sam build | sam deploy | pytest tests/' && echo ''"
+        }
+      ]
+    },
+    {
+      "event": "UserPromptSubmit",
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "TDD compliance reminder",
+          "command": "if echo \"$CLAUDE_USER_PROMPT\" | grep -iE 'implement|create|add.*function|lambda'; then echo '🧪 TDD Reminder: Write tests first! Create test file before implementation.'; fi"
+        }
+      ]
+    },
+    {
+      "event": "Stop",
+      "matcher": "",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Update agent strategy documents reminder",
+          "command": "echo '📝 Session Complete! Remember to update strategy documents in /docs/strategies/ with any new learnings.'"
+        }
+      ]
+    },
+    {
+      "event": "PreToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Validate EventBridge patterns",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ eventbridge.*\\.json$ ]] || grep -q 'EventPattern' \"$CLAUDE_FILE_PATH\" 2>/dev/null; then echo '🔍 Validating EventBridge pattern...'; python3 -m json.tool \"$CLAUDE_FILE_PATH\" >/dev/null 2>&1 || echo '❌ Invalid JSON in EventBridge pattern'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Check DynamoDB query efficiency",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]] && grep -q 'scan(' \"$CLAUDE_FILE_PATH\"; then echo '⚠️ WARNING: DynamoDB scan detected - consider using query() for better performance'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Validate Step Functions state machine",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ state-machine.*\\.json$ ]]; then echo '🔄 Validating Step Functions definition...' && python3 -c \"import json; json.load(open('$CLAUDE_FILE_PATH'))\" 2>/dev/null || echo '❌ Invalid state machine JSON'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Check Lambda cold start optimization",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*\\.py$ ]]; then size=$(wc -c < \"$CLAUDE_FILE_PATH\" 2>/dev/null); imports=$(grep -c '^import\\|^from' \"$CLAUDE_FILE_PATH\" 2>/dev/null); if [ \"$size\" -gt 50000 ] || [ \"$imports\" -gt 20 ]; then echo '⚠️ Large Lambda detected - consider splitting or optimizing imports for cold starts'; fi; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Bash",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Log AWS API calls for cost tracking",
+          "command": "if echo \"$CLAUDE_BASH_COMMAND\" | grep -E 'aws|sam deploy'; then echo \"$(date): $CLAUDE_BASH_COMMAND\" >> ~/.claude/aws-api-calls.log 2>/dev/null; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Edit|Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Validate HMAC authentication implementation",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ lambdas/.*auth.*\\.py$ ]] && ! grep -q 'hmac\\|HMAC' \"$CLAUDE_FILE_PATH\"; then echo '⚠️ Authentication function without HMAC detected - ensure proper security'; fi"
+        }
+      ]
+    },
+    {
+      "event": "PostToolUse",
+      "matcher": "Write",
+      "hooks": [
+        {
+          "type": "command",
+          "description": "Check for WordPress plugin compatibility",
+          "command": "if [[ \"$CLAUDE_FILE_PATH\" =~ wordpress.*\\.php$ ]]; then echo '🔌 WordPress file detected - ensure multisite compatibility'; fi"
+        }
+      ]
+    }
+  ],
+  "security": {
+    "auditLog": true,
+    "auditFile": "~/.claude/form-bridge-audit.log",
+    "sensitivePatterns": [
+      "password",
+      "secret",
+      "token",
+      "key",
+      "credential",
+      "private",
+      "api_key",
+      "hmac",
+      "signature",
+      "tenant_key"
+    ],
+    "blockedOperations": [
+      "rm -rf /",
+      "chmod 777",
+      "sudo rm",
+      "git push --force",
+      "aws iam delete",
+      "aws s3 rm --recursive",
+      "DROP TABLE",
+      "DELETE FROM"
+    ],
+    "requiredApprovals": [
+      "production deployment",
+      "database migration",
+      "IAM policy changes",
+      "API Gateway changes",
+      "EventBridge rule modifications"
+    ]
+  },
+  "compliance": {
+    "aws": {
+      "requireEncryption": true,
+      "blockPublicS3": true,
+      "enforceVPC": false,
+      "requireMFA": true,
+      "maxLambdaTimeout": 300,
+      "maxLambdaMemory": 3008
+    },
+    "code": {
+      "pythonVersion": "3.12",
+      "maxLambdaSize": "50MB",
+      "minTestCoverage": 80,
+      "maxCyclomaticComplexity": 10,
+      "requireTypeHints": true
+    },
+    "security": {
+      "requireHttps": true,
+      "enforceHMAC": true,
+      "maxSecretAge": "90days",
+      "requiredHeaders": [
+        "X-API-Key",
+        "X-Request-ID",
+        "X-Tenant-ID"
+      ],
+      "multiTenantIsolation": true
+    }
+  },
+  "workflow": {
+    "tdd": {
+      "enforced": true,
+      "testFirst": true,
+      "coverageThreshold": 80,
+      "requireMocks": true
+    },
+    "documentation": {
+      "autoGenerate": ["api", "schemas"],
+      "requiredFor": ["lambdas", "state-machines", "eventbridge-rules"],
+      "format": "markdown",
+      "updateStrategies": true
+    },
+    "deployment": {
+      "stages": ["dev", "staging", "prod"],
+      "requireApproval": ["staging", "prod"],
+      "autoRollback": true,
+      "smokeTests": true,
+      "healthChecks": true
+    },
+    "monitoring": {
+      "cloudWatch": true,
+      "xRay": true,
+      "customMetrics": true,
+      "alerting": true
+    }
+  },
+  "optimization": {
+    "lambda": {
+      "coldStartWarning": 1000,
+      "memorySizeCheck": true,
+      "layerOptimization": true,
+      "asyncPatterns": true
+    },
+    "dynamodb": {
+      "preventScans": true,
+      "optimizeQueries": true,
+      "batchOperations": true,
+      "consistentReads": "warn"
+    },
+    "eventbridge": {
+      "patternValidation": true,
+      "dlqRequired": true,
+      "retryPolicy": true,
+      "archiveEvents": true
+    },
+    "cost": {
+      "trackApiCalls": true,
+      "estimateChanges": true,
+      "warnThreshold": 100,
+      "blockThreshold": 500
+    }
+  }
+}

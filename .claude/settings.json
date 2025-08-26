@@ -1,0 +1,159 @@
+{
+  "description": "Multi-Provider Static Site Template - Production Ready",
+  "version": "1.0.0",
+  "defaultModel": "claude-opus-4-1",
+  "permissions": {
+    "allow": [
+      "Read:*",
+      "Grep:*", 
+      "Glob:*",
+      "LS:*",
+      "Bash:docker compose*",
+      "Bash:npm run*",
+      "Bash:git status*",
+      "Bash:git diff*",
+      "Bash:git log*",
+      "WebSearch",
+      "WebFetch:domain:docs.aws.amazon.com",
+      "WebFetch:domain:docs.netlify.com",
+      "WebFetch:domain:docs.anthropic.com",
+      "WebFetch:domain:github.com"
+    ],
+    "autoApprove": {
+      "read": true,
+      "grep": true,
+      "glob": true,
+      "ls": true,
+      "webSearch": true,
+      "dockerCompose": true,
+      "npmRun": true,
+      "gitStatus": true
+    },
+    "requireApproval": [
+      "Edit:*",
+      "Write:*",
+      "Bash:aws*",
+      "Bash:netlify*",
+      "Bash:gh*",
+      "Bash:rm*",
+      "Bash:mv*",
+      "Bash:cp*"
+    ]
+  },
+  "providers": {
+    "aws": {
+      "name": "Amazon Web Services",
+      "primary": true,
+      "description": "Enterprise-grade deployment with CloudFront CDN",
+      "domains": [
+        "docs.aws.amazon.com",
+        "aws.amazon.com",
+        "console.aws.amazon.com"
+      ],
+      "requiredEnvVars": [
+        "AWS_REGION",
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY"
+      ],
+      "optionalEnvVars": [
+        "CERTIFICATE_ARN",
+        "DOMAIN_NAME",
+        "SUBDOMAIN"
+      ]
+    },
+    "netlify": {
+      "name": "Netlify",
+      "description": "Rapid deployment with branch previews",
+      "domains": [
+        "docs.netlify.com",
+        "netlify.com",
+        "app.netlify.com"
+      ],
+      "requiredEnvVars": [],
+      "optionalEnvVars": [
+        "NETLIFY_AUTH_TOKEN",
+        "NETLIFY_SITE_ID"
+      ]
+    },
+    "vercel": {
+      "name": "Vercel",
+      "description": "Future provider - Edge functions and analytics",
+      "enabled": false,
+      "domains": [
+        "vercel.com",
+        "vercel.com/docs"
+      ]
+    }
+  },
+  "security": {
+    "enforcementLevel": "strict",
+    "auditCommands": true,
+    "blockSensitiveFiles": true,
+    "requireHttps": true,
+    "sensitivePatterns": [
+      "password",
+      "secret", 
+      "token",
+      "key",
+      "credential",
+      "private"
+    ]
+  },
+  "development": {
+    "defaultProvider": "netlify",
+    "testCoverageThreshold": 70,
+    "maxBundleSize": "2MB",
+    "dockerRequired": true,
+    "nodeVersion": "20"
+  },
+  "deployment": {
+    "preDeployChecks": [
+      "typeCheck",
+      "tests",
+      "lint",
+      "securityAudit",
+      "buildValidation"
+    ],
+    "postDeployValidation": [
+      "httpsEnforcement",
+      "securityHeaders",
+      "dnsPropagation",
+      "performanceCheck"
+    ]
+  },
+  "agents": {
+    "available": [
+      "frontend-react",
+      "aws-infrastructure", 
+      "test-qa-engineer",
+      "principal-engineer",
+      "repo-strategy-owner",
+      "docs-rag-curator",
+      "debug-champion",
+      "cicd-cloudformation-engineer"
+    ],
+    "autoDelegate": {
+      "frontend": "frontend-react",
+      "infrastructure": "aws-infrastructure",
+      "testing": "test-qa-engineer",
+      "architecture": "principal-engineer"
+    }
+  },
+  "qualityGates": {
+    "security": {
+      "vulnerabilities": 0,
+      "sensitiveDataExposure": 0,
+      "httpsEnforcement": "required"
+    },
+    "performance": {
+      "bundleSize": "2MB",
+      "lighthouse": 90,
+      "coreWebVitals": "passing"
+    },
+    "reliability": {
+      "testCoverage": 70,
+      "buildSuccess": "required",
+      "deploymentValidation": "required"
+    }
+  }
+}

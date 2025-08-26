@@ -1,0 +1,29 @@
+FROM mcr.microsoft.com/playwright:v1.40.0-focal
+
+# Set working directory
+WORKDIR /app
+
+# Install Node.js dependencies
+COPY package.json package-lock.json ./
+RUN npm ci
+
+# Install additional testing dependencies
+RUN npm install --save-dev \
+    @playwright/test \
+    @axe-core/playwright \
+    playwright-lighthouse \
+    cross-env
+
+# Copy Playwright configuration
+COPY playwright.config.ts .
+COPY tests/e2e ./tests
+
+# Create test results directory
+RUN mkdir -p /app/test-results
+
+# Set environment variables
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms/playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
+# Default command
+CMD ["npx", "playwright", "test"]

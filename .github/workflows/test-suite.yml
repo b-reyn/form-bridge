@@ -1,0 +1,547 @@
+name: Form-Bridge Comprehensive Test Suite
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Run full test suite daily at 2 AM UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    inputs:
+      test_type:
+        description: 'Type of tests to run'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - unit
+          - integration
+          - security
+          - performance
+          - e2e
+
+env:
+  PYTHON_VERSION: '3.12'
+  NODE_VERSION: '20'
+  AWS_DEFAULT_REGION: 'us-east-1'
+  LOCALSTACK_ENDPOINT: 'http://localhost:4566'
+
+jobs:
+  # Security scanning - runs first to catch issues early
+  security-scan:
+    name: 🔒 Security Scanning
+    runs-on: ubuntu-latest
+    outputs:
+      security-passed: ${{ steps.security-check.outputs.passed }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history for better security analysis
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install security tools
+        run: |
+          pip install --upgrade pip
+          pip install bandit[toml]==1.7.5 safety==2.3.5 semgrep==1.45.0
+          pip install pip-audit==2.6.1 detect-secrets==1.4.0
+
+      - name: Create results directory
+        run: mkdir -p test-results/security
+
+      - name: Run Bandit security scan
+        run: |
+          bandit -r lambdas/ -f json -o test-results/security/bandit-report.json || true
+          bandit -r lambdas/ -f txt -o test-results/security/bandit-report.txt || true
+
+      - name: Run Safety dependency scan
+        run: |
+          pip install -r requirements-test.txt
+          safety check --json --output test-results/security/safety-report.json || true
+          safety check --output test-results/security/safety-report.txt || true
+
+      - name: Run Semgrep security scan
+        run: |
+          semgrep --config=auto lambdas/ --json --output=test-results/security/semgrep-report.json || true
+          semgrep --config=auto lambdas/ --output=test-results/security/semgrep-report.txt || true
+
+      - name: Run pip-audit for vulnerabilities
+        run: |
+          pip-audit --desc --format=json --output=test-results/security/pip-audit-report.json || true
+
+      - name: Run detect-secrets scan
+        run: |
+          detect-secrets scan lambdas/ --all-files > test-results/security/secrets-baseline.json || true
+
+      - name: Analyze security results
+        id: security-check
+        run: |
+          python scripts/analyze-security-results.py test-results/security/
+          echo "passed=$?" >> $GITHUB_OUTPUT
+
+      - name: Upload security reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-reports
+          path: test-results/security/
+          retention-days: 30
+
+      - name: Comment security results on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let comment = '## 🔒 Security Scan Results\n\n';
+            
+            try {
+              const banditReport = JSON.parse(fs.readFileSync('test-results/security/bandit-report.json', 'utf8'));
+              comment += `**Bandit:** ${banditReport.metrics._totals.high_severity || 0} high, ${banditReport.metrics._totals.medium_severity || 0} medium issues\n`;
+            } catch (e) {}
+            
+            try {
+              const safetyReport = JSON.parse(fs.readFileSync('test-results/security/safety-report.json', 'utf8'));
+              comment += `**Safety:** ${safetyReport.vulnerabilities?.length || 0} vulnerabilities found\n`;
+            } catch (e) {}
+            
+            comment += '\n[View detailed reports in artifacts]';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: comment
+            });
+
+  # Unit tests - fast feedback
+  unit-tests:
+    name: 🧪 Unit Tests
+    runs-on: ubuntu-latest
+    needs: [security-scan]
+    if: needs.security-scan.outputs.security-passed == 'true' || github.event.inputs.test_type == 'unit'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Create test results directory
+        run: mkdir -p test-results
+
+      - name: Run unit tests
+        run: |
+          pytest tests/unit/ -v \
+            --cov=lambdas \
+            --cov-report=xml:test-results/coverage.xml \
+            --cov-report=html:test-results/coverage-html \
+            --cov-report=term-missing \
+            --cov-fail-under=90 \
+            --junit-xml=test-results/junit-unit.xml \
+            --json-report --json-report-file=test-results/unit-report.json
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: unit-test-results
+          path: test-results/
+          retention-days: 30
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: always()
+        with:
+          file: test-results/coverage.xml
+          flags: unit-tests
+          name: Unit Tests Coverage
+
+  # Integration tests with LocalStack
+  integration-tests:
+    name: 🔗 Integration Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    services:
+      localstack:
+        image: localstack/localstack:3.0
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: dynamodb,lambda,events,apigateway,secretsmanager,logs
+          DEBUG: 1
+          DOCKER_HOST: unix:///var/run/docker.sock
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/health || exit 1"
+          --health-interval=30s
+          --health-timeout=10s
+          --health-retries=3
+          --health-start-period=40s
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-test.txt
+
+      - name: Wait for LocalStack
+        run: |
+          echo "Waiting for LocalStack to be ready..."
+          timeout 60 bash -c 'until curl -f http://localhost:4566/health; do echo "Waiting..."; sleep 2; done'
+
+      - name: Setup test infrastructure
+        run: |
+          python scripts/setup-test-infrastructure.py
+
+      - name: Run integration tests
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+          LOCALSTACK_ENDPOINT: ${{ env.LOCALSTACK_ENDPOINT }}
+        run: |
+          pytest tests/integration/ -v \
+            --junit-xml=test-results/junit-integration.xml \
+            --json-report --json-report-file=test-results/integration-report.json \
+            -m "not slow"
+
+      - name: Run multi-tenant isolation tests
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+          LOCALSTACK_ENDPOINT: ${{ env.LOCALSTACK_ENDPOINT }}
+        run: |
+          pytest tests/integration/test_multi_tenant_isolation.py -v \
+            --junit-xml=test-results/junit-multi-tenant.xml \
+            --json-report --json-report-file=test-results/multi-tenant-report.json
+
+      - name: Upload integration test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: integration-test-results
+          path: test-results/
+          retention-days: 30
+
+  # Load testing with k6
+  load-tests:
+    name: ⚡ Load Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.event_name == 'push' || github.event.inputs.test_type == 'performance' || github.event.inputs.test_type == 'all'
+    services:
+      localstack:
+        image: localstack/localstack:3.0
+        ports:
+          - 4566:4566
+        env:
+          SERVICES: dynamodb,lambda,events,apigateway,secretsmanager
+          DEBUG: 1
+        options: >-
+          --health-cmd="curl -f http://localhost:4566/health || exit 1"
+          --health-interval=30s
+          --health-timeout=10s
+          --health-retries=3
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup k6
+        uses: grafana/setup-k6-action@v1
+
+      - name: Setup Python for infrastructure
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install boto3 requests
+
+      - name: Wait for LocalStack
+        run: |
+          timeout 60 bash -c 'until curl -f http://localhost:4566/health; do echo "Waiting..."; sleep 2; done'
+
+      - name: Setup test infrastructure
+        run: python scripts/setup-test-infrastructure.py
+        env:
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          AWS_DEFAULT_REGION: ${{ env.AWS_DEFAULT_REGION }}
+          LOCALSTACK_ENDPOINT: ${{ env.LOCALSTACK_ENDPOINT }}
+
+      - name: Run k6 load tests
+        run: |
+          k6 run tests/load/form-submission-load-test.js \
+            --out json=test-results/k6-results.json \
+            --summary-export=test-results/k6-summary.json
+        env:
+          API_ENDPOINT: ${{ env.LOCALSTACK_ENDPOINT }}
+
+      - name: Upload load test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: load-test-results
+          path: test-results/
+          retention-days: 30
+
+  # E2E tests with Playwright
+  e2e-tests:
+    name: 🎭 E2E Tests
+    runs-on: ubuntu-latest
+    needs: [integration-tests]
+    if: github.event_name == 'push' || github.event.inputs.test_type == 'e2e' || github.event.inputs.test_type == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps
+
+      - name: Setup test environment
+        run: |
+          # Start mock services for E2E testing
+          docker-compose -f docker-compose.test.yml up -d localstack
+          sleep 30
+
+      - name: Run Playwright E2E tests
+        run: |
+          npx playwright test tests/e2e/ \
+            --reporter=html:test-results/playwright-report \
+            --output-dir=test-results/test-output
+        env:
+          BASE_URL: http://localhost:4566
+
+      - name: Upload E2E test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-test-results
+          path: test-results/
+          retention-days: 30
+
+  # WordPress integration tests
+  wordpress-tests:
+    name: 🔌 WordPress Tests
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    if: github.event_name == 'push' || github.event.inputs.test_type == 'all'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup WordPress test environment
+        run: |
+          docker-compose -f docker-compose.test.yml up -d wordpress mysql localstack
+          sleep 60 # Wait for WordPress to initialize
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements-test.txt
+          pip install python-wordpress-xmlrpc selenium beautifulsoup4
+
+      - name: Run WordPress plugin tests
+        run: |
+          pytest tests/wordpress/ -v \
+            --junit-xml=test-results/junit-wordpress.xml
+        env:
+          WORDPRESS_URL: http://localhost:8080
+          LOCALSTACK_ENDPOINT: ${{ env.LOCALSTACK_ENDPOINT }}
+
+      - name: Upload WordPress test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: wordpress-test-results
+          path: test-results/
+          retention-days: 30
+
+  # Performance regression testing
+  performance-regression:
+    name: 📊 Performance Regression
+    runs-on: ubuntu-latest
+    needs: [load-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download load test results
+        uses: actions/download-artifact@v4
+        with:
+          name: load-test-results
+          path: current-results/
+
+      - name: Download baseline results
+        uses: actions/download-artifact@v4
+        with:
+          name: performance-baseline
+          path: baseline-results/
+        continue-on-error: true
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Analyze performance regression
+        run: |
+          python scripts/analyze-performance-regression.py \
+            --current current-results/k6-summary.json \
+            --baseline baseline-results/k6-summary.json \
+            --threshold 0.1 \
+            --output test-results/regression-report.json
+
+      - name: Update performance baseline
+        if: success()
+        run: |
+          cp current-results/k6-summary.json test-results/performance-baseline.json
+
+      - name: Upload regression analysis
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-baseline
+          path: test-results/performance-baseline.json
+          retention-days: 90
+
+  # Test results consolidation and reporting
+  test-report:
+    name: 📋 Test Report
+    runs-on: ubuntu-latest
+    needs: [security-scan, unit-tests, integration-tests, load-tests, e2e-tests, wordpress-tests]
+    if: always()
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all test artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-results/
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Generate consolidated report
+        run: |
+          python scripts/generate-test-report.py all-results/ test-report.html
+
+      - name: Upload consolidated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: consolidated-test-report
+          path: test-report.html
+          retention-days: 90
+
+      - name: Comment test summary on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let summary = '## 🧪 Test Results Summary\n\n';
+            
+            // Add status badges for each test type
+            const jobs = [
+              { name: 'Security', job: 'security-scan' },
+              { name: 'Unit Tests', job: 'unit-tests' },
+              { name: 'Integration', job: 'integration-tests' },
+              { name: 'Load Tests', job: 'load-tests' },
+              { name: 'E2E Tests', job: 'e2e-tests' },
+              { name: 'WordPress', job: 'wordpress-tests' }
+            ];
+            
+            for (const job of jobs) {
+              const status = '${{ needs[job.job].result }}' || 'skipped';
+              const icon = status === 'success' ? '✅' : status === 'failure' ? '❌' : '⏭️';
+              summary += `${icon} **${job.name}**: ${status}\n`;
+            }
+            
+            summary += '\n[📊 View detailed results in Actions artifacts]';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: summary
+            });
+
+  # Deploy staging environment if all tests pass
+  deploy-staging:
+    name: 🚀 Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: [security-scan, unit-tests, integration-tests, load-tests]
+    if: github.ref == 'refs/heads/develop' && success()
+    environment:
+      name: staging
+      url: https://staging.form-bridge.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to staging
+        run: |
+          echo "Deploying to staging environment..."
+          # Add actual deployment commands here
+          
+  # Deploy production environment if all tests pass on main
+  deploy-production:
+    name: 🚀 Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [security-scan, unit-tests, integration-tests, load-tests, performance-regression]
+    if: github.ref == 'refs/heads/main' && success()
+    environment:
+      name: production
+      url: https://form-bridge.example.com
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying to production environment..."
+          # Add actual deployment commands here
