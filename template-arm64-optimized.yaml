@@ -100,7 +100,7 @@ Resources:
               Action:
                 - cloudwatch:PutMetricData
               Resource: '*'
-      ReservedConcurrencyLimit: 100
+      ReservedConcurrentExecutions: 100
       # Enable AWS X-Ray tracing
       Tracing: Active
       DeadLetterQueue:
@@ -158,7 +158,7 @@ Resources:
               Action:
                 - cloudwatch:PutMetricData
               Resource: '*'
-      ReservedConcurrencyLimit: 200
+      ReservedConcurrentExecutions: 200
       Tracing: Active
 
   SmartConnectorFunction:
@@ -186,7 +186,7 @@ Resources:
               Action:
                 - cloudwatch:PutMetricData
               Resource: '*'
-      ReservedConcurrencyLimit: 50
+      ReservedConcurrentExecutions: 50
       Tracing: Active
       DeadLetterQueue:
         Type: SQS
@@ -305,7 +305,7 @@ Resources:
               Action:
                 - cloudwatch:PutMetricData
               Resource: '*'
-      ReservedConcurrencyLimit: 300
+      ReservedConcurrentExecutions: 300
       Tracing: Active
 
   # ==================================================
