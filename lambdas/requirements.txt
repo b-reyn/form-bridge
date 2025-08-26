@@ -1,30 +1,23 @@
-# AWS Lambda Powertools for ARM64
-aws-lambda-powertools[all]==2.36.0
+# AWS Lambda Powertools for ARM64 (compatible version)
+aws-lambda-powertools==2.36.0
 
 # Core dependencies
-boto3==1.34.30
-botocore==1.34.30
+boto3>=1.34.0
+botocore>=1.34.0
 
-# JSON processing and validation
-pydantic==2.5.3
-jsonschema==4.21.1
+# JSON processing and validation (compatible with powertools)
+jsonschema>=4.0.0
 
 # HTTP client with connection pooling
-httpx==0.26.0
-requests==2.31.0
+httpx>=0.25.0
+requests>=2.31.0
 
 # Cryptography for HMAC validation
-cryptography==42.0.2
-PyJWT==2.8.0
+cryptography>=42.0.0
+PyJWT>=2.8.0
 
 # Multi-tenant utilities
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]>=3.3.0
 
 # Performance and monitoring
-psutil==5.9.7
-structlog==23.2.0
-
-# Development and testing (optional)
-pytest==7.4.4
-pytest-mock==3.12.0
-moto==4.2.14
+structlog>=23.0.0
