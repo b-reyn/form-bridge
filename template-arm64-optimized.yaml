@@ -316,7 +316,6 @@ Resources:
     Type: AWS::Events::EventBus
     Properties:
       Name: !Ref EventBusName
-      EventSourceName: formbridge
 
   # ==================================================
   # DynamoDB - Multi-Tenant Data Store  
@@ -357,7 +356,6 @@ Resources:
         PointInTimeRecoveryEnabled: true
       SSESpecification:
         SSEEnabled: true
-        KMSMasterKeyId: alias/aws/dynamodb
       StreamSpecification:
         StreamViewType: NEW_AND_OLD_IMAGES
       Tags:
@@ -413,7 +411,7 @@ Resources:
     Properties:
       QueueName: !Sub 'formbridge-authorizer-dlq-${Environment}'
       MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 60
+      VisibilityTimeout: 60
       KmsMasterKeyId: alias/aws/sqs
 
   ProcessorDLQ:
@@ -421,7 +419,7 @@ Resources:
     Properties:
       QueueName: !Sub 'formbridge-processor-dlq-${Environment}'
       MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 300
+      VisibilityTimeout: 300
       KmsMasterKeyId: alias/aws/sqs
 
   ConnectorDLQ:
@@ -429,7 +427,7 @@ Resources:
     Properties:
       QueueName: !Sub 'formbridge-connector-dlq-${Environment}'
       MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 120
+      VisibilityTimeout: 120
       KmsMasterKeyId: alias/aws/sqs
 
   DeliveryDLQ:
@@ -437,7 +435,7 @@ Resources:
     Properties:
       QueueName: !Sub 'formbridge-delivery-dlq-${Environment}'
       MessageRetentionPeriod: 1209600  # 14 days
-      VisibilityTimeoutSeconds: 300
+      VisibilityTimeout: 300
       KmsMasterKeyId: alias/aws/sqs
 
   # ==================================================
