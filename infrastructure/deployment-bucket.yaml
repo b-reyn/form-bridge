@@ -34,17 +34,29 @@ Resources:
             Status: Enabled
             AbortIncompleteMultipartUpload:
               DaysAfterInitiation: 7
-      NotificationConfiguration:
-        CloudWatchConfigurations:
-          - Event: s3:ObjectCreated:*
-            CloudWatchConfiguration:
-              LogGroupName: !Ref DeploymentBucketLogGroup
+      LoggingConfiguration:
+        DestinationBucketName: !Ref LoggingBucket
+        LogFilePrefix: deployment-bucket-logs/
               
-  DeploymentBucketLogGroup:
-    Type: AWS::Logs::LogGroup
+  LoggingBucket:
+    Type: AWS::S3::Bucket
     Properties:
-      LogGroupName: !Sub '/aws/s3/${BucketName}-${AWS::AccountId}'
-      RetentionInDays: 14
+      BucketName: !Sub '${BucketName}-logs-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldLogs
+            Status: Enabled
+            Expiration:
+              Days: 14
 
   DeploymentBucketPolicy:
     Type: AWS::S3::BucketPolicy
