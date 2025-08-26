@@ -74,18 +74,6 @@ Resources:
             Condition:
               Bool:
                 'aws:SecureTransport': 'false'
-          - Sid: AllowGitHubActionsAccess
-            Effect: Allow
-            Principal:
-              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:role/GitHubActionsDeploymentRole'
-            Action:
-              - 's3:GetObject'
-              - 's3:PutObject'
-              - 's3:DeleteObject'
-              - 's3:ListBucket'
-            Resource:
-              - !Sub '${DeploymentBucket}/*'
-              - !GetAtt DeploymentBucket.Arn
         
 Outputs:
   BucketName:
