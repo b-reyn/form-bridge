@@ -325,7 +325,7 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Ref DynamoDBTableName
-      BillingMode: ON_DEMAND  # Cost-optimized for variable workloads
+      BillingMode: PAY_PER_REQUEST  # Cost-optimized for variable workloads
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
