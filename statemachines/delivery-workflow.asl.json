@@ -1,0 +1,93 @@
+{
+  "Comment": "Form-Bridge multi-tenant delivery orchestration workflow",
+  "StartAt": "ValidateSubmission",
+  "States": {
+    "ValidateSubmission": {
+      "Type": "Pass",
+      "Parameters": {
+        "submission_id.$": "$.submission_id",
+        "tenant_id.$": "$.tenant_id",
+        "destinations.$": "$.destinations",
+        "payload.$": "$.payload",
+        "timestamp.$": "$$.State.EnteredTime"
+      },
+      "Next": "ProcessDeliveries"
+    },
+    "ProcessDeliveries": {
+      "Type": "Map",
+      "ItemsPath": "$.destinations",
+      "MaxConcurrency": 5,
+      "Iterator": {
+        "StartAt": "DeliverToEndpoint",
+        "States": {
+          "DeliverToEndpoint": {
+            "Type": "Task",
+            "Resource": "${SmartConnectorFunctionArn}",
+            "Parameters": {
+              "submission_id.$": "$.submission_id",
+              "tenant_id.$": "$.tenant_id",
+              "destination.$": "$$.Map.Item.Value",
+              "payload.$": "$.payload",
+              "retry_count": 0
+            },
+            "Retry": [
+              {
+                "ErrorEquals": ["States.TaskFailed", "Lambda.ServiceException", "Lambda.AWSLambdaException"],
+                "IntervalSeconds": 2,
+                "MaxAttempts": 3,
+                "BackoffRate": 2.0
+              }
+            ],
+            "Catch": [
+              {
+                "ErrorEquals": ["States.ALL"],
+                "Next": "DeliveryFailed",
+                "ResultPath": "$.error"
+              }
+            ],
+            "Next": "DeliverySuccess"
+          },
+          "DeliverySuccess": {
+            "Type": "Pass",
+            "Parameters": {
+              "status": "SUCCESS",
+              "submission_id.$": "$.submission_id",
+              "tenant_id.$": "$.tenant_id",
+              "destination.$": "$.destination",
+              "timestamp.$": "$$.State.EnteredTime"
+            },
+            "End": true
+          },
+          "DeliveryFailed": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::sqs:sendMessage",
+            "Parameters": {
+              "QueueUrl": "${DLQUrl}",
+              "MessageBody": {
+                "status": "FAILED",
+                "submission_id.$": "$.submission_id",
+                "tenant_id.$": "$.tenant_id",
+                "destination.$": "$.destination",
+                "error.$": "$.error",
+                "timestamp.$": "$$.State.EnteredTime"
+              }
+            },
+            "End": true
+          }
+        }
+      },
+      "Next": "SummarizeResults"
+    },
+    "SummarizeResults": {
+      "Type": "Pass",
+      "Parameters": {
+        "submission_id.$": "$.submission_id",
+        "tenant_id.$": "$.tenant_id",
+        "total_destinations.$": "States.ArrayLength($.destinations)",
+        "results.$": "$",
+        "completed_at.$": "$$.State.EnteredTime"
+      },
+      "End": true
+    }
+  }
+}
