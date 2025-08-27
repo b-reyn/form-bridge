@@ -43,7 +43,6 @@ Resources:
             - '*'              # Restrict in production
           AllowMethods:
             - POST
-            - OPTIONS
           AllowHeaders:
             - Content-Type
             - X-Signature
