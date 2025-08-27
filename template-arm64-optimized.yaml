@@ -318,14 +318,14 @@ Resources:
       Name: !Ref EventBusName
 
   # ==================================================
-  # DynamoDB - Multi-Tenant Data Store  
+  # DynamoDB - Bare Bones Single Table (MVP)
   # ==================================================
   
   MultiTenantDataTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Ref DynamoDBTableName
-      BillingMode: PAY_PER_REQUEST  # Cost-optimized for variable workloads
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -341,28 +341,14 @@ Resources:
         - AttributeName: SK
           KeyType: RANGE
       GlobalSecondaryIndexes:
-        - IndexName: GSI1
+        - IndexName: TenantIndex
           KeySchema:
             - AttributeName: GSI1PK
               KeyType: HASH
             - AttributeName: GSI1SK
               KeyType: RANGE
           Projection:
-            ProjectionType: ALL
-      TimeToLiveSpecification:
-        AttributeName: ttl
-        Enabled: true
-      PointInTimeRecoverySpecification:
-        PointInTimeRecoveryEnabled: true
-      SSESpecification:
-        SSEEnabled: true
-      StreamSpecification:
-        StreamViewType: NEW_AND_OLD_IMAGES
-      Tags:
-        - Key: Environment
-          Value: !Ref Environment
-        - Key: Application
-          Value: FormBridge
+            ProjectionType: KEYS_ONLY
 
   # ==================================================
   # S3 - Large Payload Storage

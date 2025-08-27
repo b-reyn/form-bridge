@@ -1,0 +1,332 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge Ultra-Simple Architecture - Zero to Minimal Cost'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues: [test, prod]
+    Description: Deployment environment
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        LOG_LEVEL: INFO
+
+Resources:
+  # =========================================
+  # Single Lambda Function with Function URL
+  # =========================================
+  
+  FormHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-handler-${Environment}'
+      Description: 'Ultra-simple form submission handler'
+      CodeUri: ./
+      Handler: handler.lambda_handler
+      # Use ARM64 for 20% cost savings (though free tier covers both)
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DataTable
+          # In production, use Secrets Manager
+          HMAC_SECRET: !Sub '{{resolve:secretsmanager:form-bridge-${Environment}-secret::secret}}'
+      # Lambda Function URL - Direct HTTPS endpoint (no API Gateway needed)
+      FunctionUrlConfig:
+        AuthType: NONE  # We handle auth in the function
+        InvokeMode: BUFFERED  # Synchronous (default)
+        Cors:
+          AllowOrigins:
+            - '*'  # Restrict in production
+          AllowMethods:
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+            - X-Signature
+            - X-Timestamp
+          MaxAge: 86400
+      # Minimal permissions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  # ===============================
+  # Single DynamoDB Table (Simple)
+  # ===============================
+  
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'form-bridge-${Environment}'
+      # Pay per request - perfect for low/variable traffic
+      BillingMode: PAY_PER_REQUEST
+      # Minimal attributes for flexibility
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      # Enable TTL for automatic cleanup (saves money)
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      # Point-in-time recovery (optional, adds cost)
+      # PointInTimeRecoverySpecification:
+      #   PointInTimeRecoveryEnabled: false
+      # Server-side encryption (free with AWS managed keys)
+      SSESpecification:
+        SSEEnabled: true
+        SSEType: KMS
+        KMSMasterKeyId: alias/aws/dynamodb  # AWS managed (free)
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: FormBridge
+
+  # ===============================
+  # S3 Bucket for Admin UI (Static)
+  # ===============================
+  
+  AdminUIBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'form-bridge-ui-${Environment}-${AWS::AccountId}'
+      # Enable static website hosting
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      # Minimal public access for CloudFront only
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      # Versioning (optional, adds storage cost)
+      # VersioningConfiguration:
+      #   Status: Suspended
+      # Lifecycle rule to delete old versions
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldVersions
+            Status: Enabled
+            NoncurrentVersionExpirationInDays: 7
+            AbortIncompleteMultipartUploadDays: 1
+      # Server-side encryption (free with S3 managed keys)
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: FormBridge-UI
+
+  # Bucket Policy for public read (UI files only)
+  AdminUIBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AdminUIBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub '${AdminUIBucket.Arn}/*'
+            Condition:
+              StringLike:
+                aws:Referer:
+                  - !Sub 'https://*.cloudfront.net/*'
+                  - !Sub 'https://*.amazonaws.com/*'
+
+  # ===============================
+  # CloudFront Distribution (CDN)
+  # ===============================
+  
+  CloudFrontDistribution:
+    Type: AWS::CloudFront::Distribution
+    Properties:
+      DistributionConfig:
+        Enabled: true
+        Comment: !Sub 'Form Bridge Admin UI - ${Environment}'
+        # Use cheapest price class for MVP
+        PriceClass: PriceClass_100  # US, Canada, Europe only
+        HttpVersion: http2
+        DefaultRootObject: index.html
+        Origins:
+          - Id: S3Origin
+            DomainName: !GetAtt AdminUIBucket.RegionalDomainName
+            S3OriginConfig:
+              OriginAccessIdentity: ''  # Public bucket
+        DefaultCacheBehavior:
+          TargetOriginId: S3Origin
+          ViewerProtocolPolicy: redirect-to-https
+          AllowedMethods:
+            - GET
+            - HEAD
+            - OPTIONS
+          CachedMethods:
+            - GET
+            - HEAD
+          Compress: true
+          # Cache for 1 hour
+          DefaultTTL: 3600
+          MinTTL: 0
+          MaxTTL: 86400
+          ForwardedValues:
+            QueryString: false
+            Cookies:
+              Forward: none
+        # Custom error pages
+        CustomErrorResponses:
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+            ErrorCachingMinTTL: 300
+
+  # ===============================
+  # Secrets Manager (HMAC Secret)
+  # ===============================
+  
+  HMACSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub 'form-bridge-${Environment}-secret'
+      Description: 'HMAC secret for form submission authentication'
+      # Generate random secret
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: 'secret'
+        PasswordLength: 64
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ===============================
+  # CloudWatch Log Group
+  # ===============================
+  
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-handler-${Environment}'
+      RetentionInDays: 7  # Minimize log storage costs
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ===============================
+  # Basic CloudWatch Alarms (Free Tier)
+  # ===============================
+  
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'FormBridge-${Environment}-Errors'
+      AlarmDescription: 'Alert on Lambda function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 5  # Alert after 5 errors
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FormHandler
+      TreatMissingData: notBreaching
+
+  ThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'FormBridge-${Environment}-Throttles'
+      AlarmDescription: 'Alert on Lambda throttling'
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref FormHandler
+
+# ===============================
+# Outputs
+# ===============================
+
+Outputs:
+  LambdaFunctionUrl:
+    Description: 'Direct Lambda endpoint for form submissions (use this in WordPress plugin)'
+    Value: !GetAtt FormHandlerUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-FunctionUrl'
+
+  DynamoDBTable:
+    Description: 'DynamoDB table name'
+    Value: !Ref DataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-TableName'
+
+  AdminUIBucket:
+    Description: 'S3 bucket for admin UI files'
+    Value: !Ref AdminUIBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-UIBucket'
+
+  CloudFrontDomain:
+    Description: 'CloudFront distribution domain for admin UI'
+    Value: !GetAtt CloudFrontDistribution.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-CloudFrontDomain'
+
+  CloudFrontURL:
+    Description: 'Full URL for admin UI'
+    Value: !Sub 'https://${CloudFrontDistribution.DomainName}'
+    Export:
+      Name: !Sub '${AWS::StackName}-AdminURL'
+
+  SecretArn:
+    Description: 'ARN of HMAC secret in Secrets Manager'
+    Value: !Ref HMACSecret
+    Export:
+      Name: !Sub '${AWS::StackName}-SecretArn'
+
+  EstimatedMonthlyCost:
+    Description: 'Estimated monthly cost for testing usage'
+    Value: '$0.00 - $0.50 (AWS Free Tier covers most usage)'
+
+  FreeTrierCoverage:
+    Description: 'What the AWS Free Tier covers'
+    Value: '1M Lambda requests, 400K GB-seconds compute, 25GB DynamoDB storage, 50GB CloudFront transfer, 5GB CloudWatch logs'

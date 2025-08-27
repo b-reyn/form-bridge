@@ -1,0 +1,164 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge MVP - Simplified for Quick Deployment'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+
+Globals:
+  Function:
+    # Use x86_64 for simpler builds, switch to ARM64 later
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 512
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        DYNAMODB_TABLE: !Ref DataTable
+        LOG_LEVEL: INFO
+
+Resources:
+  # ==================================================
+  # API Gateway - Simple REST API
+  # ==================================================
+  
+  FormBridgeApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Tenant-ID,X-Signature,X-Timestamp'"
+        AllowOrigin: "'*'"
+
+  # ==================================================
+  # Lambda Functions - Simplified
+  # ==================================================
+  
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-ingest-${Environment}'
+      Description: 'Form submission ingestion endpoint'
+      CodeUri: lambdas/
+      Handler: mvp-ingest.lambda_handler
+      Events:
+        ApiPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FormBridgeApi
+            Path: /submit
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default'
+
+  ProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-processor-${Environment}'
+      Description: 'Process form submissions from EventBridge'
+      CodeUri: lambdas/
+      Handler: mvp-processor.lambda_handler
+      Events:
+        FormSubmission:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - formbridge
+              detail-type:
+                - Form Submission
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+
+  # ==================================================
+  # DynamoDB - Bare Bones Single Table (MVP)
+  # ==================================================
+  
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'formbridge-data-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: TenantIndex
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: KEYS_ONLY
+
+  # ==================================================
+  # S3 - Optional Large Payload Storage (Simplified)
+  # ==================================================
+  
+  PayloadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'formbridge-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOld
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ==================================================
+  # Permissions
+  # ==================================================
+  
+  PayloadBucketPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ProcessorFunction
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt PayloadBucket.Arn
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${FormBridgeApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    
+  DynamoDBTable:
+    Description: 'DynamoDB table name'
+    Value: !Ref DataTable
+    
+  S3Bucket:
+    Description: 'S3 bucket for large payloads'
+    Value: !Ref PayloadBucket

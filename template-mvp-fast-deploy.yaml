@@ -1,0 +1,239 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge MVP - Fast Deployment (x86_64, Minimal Dependencies)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+    Description: Deployment environment
+  
+  SecretPrefix:
+    Type: String
+    Default: formbridge/tenants
+    Description: Prefix for tenant secrets in Secrets Manager
+
+Globals:
+  Function:
+    # x86_64 for faster builds, no ARM64 complexity
+    Runtime: python3.12
+    Architecture: x86_64
+    Timeout: 30
+    MemorySize: 256  # Minimal for cost optimization
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        DYNAMODB_TABLE: !Ref DataTable
+        SECRET_PREFIX: !Ref SecretPrefix
+        LOG_LEVEL: INFO
+
+Resources:
+  # ==================================================
+  # API Gateway with Simple Authorizer
+  # ==================================================
+  
+  FormBridgeApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: !Ref Environment
+      Auth:
+        DefaultAuthorizer: TenantAuthorizer
+        Authorizers:
+          TenantAuthorizer:
+            FunctionArn: !GetAtt ApiAuthorizerFunction.Arn
+            Identity:
+              Headers:
+                - X-Tenant-ID
+                - X-API-Key
+      Cors:
+        AllowMethods: "'GET,POST,OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Tenant-ID,X-API-Key'"
+        AllowOrigin: "'*'"
+      GatewayResponses:
+        UNAUTHORIZED:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+        MISSING_AUTHENTICATION_TOKEN:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+
+  # ==================================================
+  # Lambda Functions - MVP Simplified
+  # ==================================================
+  
+  IngestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-mvp-ingest-${Environment}'
+      Description: 'MVP form submission ingestion'
+      CodeUri: lambdas/
+      Handler: mvp-ingest-handler.lambda_handler
+      Events:
+        ApiPost:
+          Type: Api
+          Properties:
+            RestApiId: !Ref FormBridgeApi
+            Path: /submit
+            Method: POST
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - events:PutEvents
+              Resource: !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/default'
+
+  EventProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-mvp-processor-${Environment}'
+      Description: 'MVP event processor'
+      CodeUri: lambdas/
+      Handler: mvp-event-processor.lambda_handler
+      Events:
+        FormSubmissionEvent:
+          Type: EventBridgeRule
+          Properties:
+            Pattern:
+              source:
+                - formbridge.ingest
+              detail-type:
+                - Form Submission Received
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+
+  ApiAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'formbridge-mvp-authorizer-${Environment}'
+      Description: 'MVP API key authorizer'
+      CodeUri: lambdas/
+      Handler: mvp-api-authorizer.lambda_handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - secretsmanager:GetSecretValue
+              Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:${SecretPrefix}/*'
+
+  # ==================================================
+  # DynamoDB - Single Table Design (Simplified)
+  # ==================================================
+  
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'formbridge-mvp-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: DateIndex
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+
+  # ==================================================
+  # S3 - Optional Large Payload Storage
+  # ==================================================
+  
+  PayloadBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'formbridge-mvp-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: CleanupOldPayloads
+            Status: Enabled
+            ExpirationInDays: 30
+
+  # ==================================================
+  # Sample Tenant Secret (for testing)
+  # ==================================================
+  
+  SampleTenantSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '${SecretPrefix}/t_sample'
+      Description: 'Sample tenant for MVP testing'
+      SecretString: !Sub |
+        {
+          "api_key": "mvp-test-key-123",
+          "tenant_name": "Sample Tenant",
+          "created_at": "${AWS::StackId}"
+        }
+
+  # ==================================================
+  # Lambda Permissions for API Gateway
+  # ==================================================
+  
+  ApiAuthorizerInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref ApiAuthorizerFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${FormBridgeApi}/authorizers/*'
+
+Outputs:
+  ApiEndpoint:
+    Description: 'API Gateway endpoint URL'
+    Value: !Sub 'https://${FormBridgeApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub '${AWS::StackName}-ApiEndpoint'
+    
+  TestCommand:
+    Description: 'Test command with sample tenant'
+    Value: !Sub |
+      curl -X POST https://${FormBridgeApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/submit \
+        -H "Content-Type: application/json" \
+        -H "X-Tenant-ID: t_sample" \
+        -H "X-API-Key: mvp-test-key-123" \
+        -d '{"form_data": {"name": "Test User", "email": "test@example.com"}, "form_type": "contact"}'
+    
+  DynamoDBTable:
+    Description: 'DynamoDB table name'
+    Value: !Ref DataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-DataTable'
+    
+  S3Bucket:
+    Description: 'S3 bucket for large payloads'
+    Value: !Ref PayloadBucket
+    Export:
+      Name: !Sub '${AWS::StackName}-PayloadBucket'

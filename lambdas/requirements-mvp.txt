@@ -1,0 +1,12 @@
+# MVP Requirements - Minimal for Fast Deployment
+# Only essential packages, no complex dependencies
+
+# AWS SDK (comes with Lambda runtime, but explicit version for consistency)
+boto3>=1.34.0
+
+# No additional dependencies needed for MVP
+# Future iterations can add:
+# - aws-lambda-powertools (for production monitoring)
+# - cryptography (for HMAC validation)  
+# - httpx (for webhook deliveries)
+# - structlog (for structured logging)

@@ -4,8 +4,72 @@
 *Agent: principal-engineer*
 *Focus: Technical Leadership, Security Architecture, and Quality Standards*
 
-## Current Mission
-Completed comprehensive frontend architecture review of Form-Bridge, focusing on React dashboard security, WordPress plugin architecture, and performance optimization. Identified critical security issues with hardcoded admin credentials and provided detailed technical recommendations.
+## Current Mission - MVP DEPLOYMENT FOCUS
+**URGENT**: Get Form-Bridge deployed and working. Previous attempts have failed due to over-engineering. Focus on "working first, perfect later" approach.
+
+## 🚨 MVP Deployment Strategy (January 26, 2025)
+
+### Deployment Blockers Identified
+1. **ARM64 Build Timeouts**: SAM builds failing on GitHub Actions
+2. **DynamoDB Over-Configuration**: Point-in-time recovery, streams, SSE blocking deployment  
+3. **S3 Naming Conflicts**: Bucket creation failures
+4. **Complex Security Layers**: HMAC/IAM preventing basic deployment
+5. **10+ Failed GitHub Actions**: Various configuration issues
+
+### Simplification Decisions
+
+#### 1. Architecture: x86_64 First, ARM64 Later
+```yaml
+# BEFORE (Failing)
+Architectures: [arm64]  # Build timeouts
+
+# AFTER (Working)
+Runtime: python3.12     # Standard x86_64
+# Note: Switch to ARM64 after stable
+```
+
+#### 2. DynamoDB: Strip to Essentials
+```yaml
+# REMOVE these blocking features:
+- PointInTimeRecoverySpecification
+- SSESpecification  
+- StreamSpecification
+- Custom billing configuration
+
+# KEEP only:
+BillingMode: PAY_PER_REQUEST
+BasicKeys: PK, SK, GSI1
+TTL: Enabled
+```
+
+#### 3. Security: Progressive Enhancement
+```
+Phase 1 (NOW): Basic API key in headers
+Phase 2 (Day 2): Add HMAC authentication  
+Phase 3 (Week 1): Full IAM/Cognito
+```
+
+#### 4. S3: Unique Naming Pattern
+```yaml
+# Guaranteed unique bucket names:
+BucketName: !Sub 'formbridge-${Environment}-${AWS::AccountId}'
+```
+
+### Files Created for MVP
+1. `/mnt/c/projects/form-bridge/template-mvp-simplified.yaml` - Minimal SAM template
+2. `/mnt/c/projects/form-bridge/lambdas/mvp-ingest.py` - Simple ingestion function
+3. `/mnt/c/projects/form-bridge/lambdas/mvp-processor.py` - Basic processor function
+4. `/mnt/c/projects/form-bridge/.github/workflows/deploy-mvp.yml` - Simplified deployment
+
+### Deployment Commands
+```bash
+# Quick local test
+sam build --template template-mvp-simplified.yaml
+sam local start-api
+
+# Deploy to AWS
+sam deploy --guided --template template-mvp-simplified.yaml
+```
 
 ## Security Architecture Patterns
 

@@ -1,0 +1,23 @@
+# Ultra-Simple Form-Bridge Requirements
+#
+# This file is intentionally minimal/empty because:
+# 1. boto3 is included in AWS Lambda Python runtime
+# 2. All required modules are Python standard library:
+#    - json (built-in)
+#    - hmac (built-in)  
+#    - hashlib (built-in)
+#    - os (built-in)
+#    - datetime (built-in)
+#    - typing (built-in)
+#
+# This reduces:
+# - Package size (faster cold starts)
+# - Deployment time (no dependencies to install)
+# - Cost (smaller deployment package)
+#
+# For production, consider adding:
+# - aws-lambda-powertools[all]==2.* (for structured logging)
+# - requests==2.* (if HTTP requests needed)
+# - cryptography==* (for advanced encryption)
+
+# No dependencies needed for ultra-simple implementation

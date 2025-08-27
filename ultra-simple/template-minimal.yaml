@@ -1,0 +1,139 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge Ultra-Simple: Lambda + DynamoDB Only ($0/month for testing)'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues: [test, prod]
+    Description: Deployment environment
+
+Resources:
+  # =========================================
+  # Single Lambda Function (Ultra-Optimized)
+  # =========================================
+  
+  FormHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-ultra-${Environment}'
+      Description: 'Ultra-simple form handler - WordPress plugin compatible'
+      CodeUri: ./
+      Handler: handler.lambda_handler
+      Runtime: python3.12
+      # Ultra-minimal cost configuration
+      MemorySize: 128          # Lowest cost tier
+      Timeout: 15              # Fast execution expected
+      Architectures:
+        - x86_64               # Avoid ARM64 deployment complexity
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          TABLE_NAME: !Ref DataTable
+          # Use Secrets Manager in production (commented for ultra-simple)
+          HMAC_SECRET: 'development-secret-change-in-production'
+          # HMAC_SECRET: !Sub '{{resolve:secretsmanager:form-bridge-${Environment}::SecretString:secret}}'
+      # Lambda Function URL - Direct HTTPS endpoint
+      FunctionUrlConfig:
+        AuthType: NONE         # We handle auth in the function
+        InvokeMode: BUFFERED   # Synchronous
+        Cors:
+          AllowOrigins:
+            - '*'              # Restrict in production
+          AllowMethods:
+            - POST
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+            - X-Signature
+            - X-Timestamp
+          MaxAge: 86400        # Cache preflight 24 hours
+      # Minimal IAM permissions
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DataTable
+
+  # ===============================
+  # Single DynamoDB Table (Minimal)
+  # ===============================
+  
+  DataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'form-bridge-ultra-${Environment}'
+      # Pay per request - zero cost for no usage
+      BillingMode: PAY_PER_REQUEST
+      # Minimal schema for flexibility
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      # TTL for automatic cleanup (cost savings)
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      # Minimal encryption (AWS managed, free)
+      SSESpecification:
+        SSEEnabled: true
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Project
+          Value: FormBridge-Ultra
+
+  # ===============================
+  # Optional: HMAC Secret (Production)
+  # ===============================
+  
+  # Uncomment for production use
+  # HMACSecret:
+  #   Type: AWS::SecretsManager::Secret
+  #   Properties:
+  #     Name: !Sub 'form-bridge-${Environment}'
+  #     Description: 'HMAC secret for form authentication'
+  #     GenerateSecretString:
+  #       SecretStringTemplate: '{}'
+  #       GenerateStringKey: 'secret'
+  #       PasswordLength: 32
+  #       ExcludeCharacters: '"@/\'
+
+# ===============================
+# Outputs
+# ===============================
+
+Outputs:
+  LambdaFunctionUrl:
+    Description: 'WordPress plugin endpoint'
+    Value: !GetAtt FormHandlerUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-endpoint'
+
+  DynamoDBTable:
+    Description: 'Data storage table'
+    Value: !Ref DataTable
+    Export:
+      Name: !Sub '${AWS::StackName}-table'
+
+  TestCommand:
+    Description: 'Test the deployment'
+    Value: !Sub |
+      curl -X POST ${FormHandlerUrl.FunctionUrl} \
+        -H "Content-Type: application/json" \
+        -H "X-Signature: $(echo -n "$(date +%s):{}" | openssl dgst -sha256 -hmac 'development-secret-change-in-production' | cut -d' ' -f2)" \
+        -H "X-Timestamp: $(date +%s)" \
+        -d '{"form_data":{"test":"data"}}'
+
+  CostEstimate:
+    Description: 'Estimated monthly cost'
+    Value: '$0.00 (AWS Free Tier: 1M Lambda requests, 400K GB-seconds, 25GB DynamoDB)'
+
+  ScalingInfo:
+    Description: 'When to upgrade'
+    Value: 'Upgrade to full architecture at 10K+ requests/month or need admin UI'
