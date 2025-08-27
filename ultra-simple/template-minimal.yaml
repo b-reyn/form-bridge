@@ -111,7 +111,7 @@ Resources:
 Outputs:
   LambdaFunctionUrl:
     Description: 'WordPress plugin endpoint'
-    Value: !GetAtt FormHandlerUrl.FunctionUrl
+    Value: !GetAtt FormHandler.FunctionUrl
     Export:
       Name: !Sub '${AWS::StackName}-endpoint'
 
@@ -124,7 +124,7 @@ Outputs:
   TestCommand:
     Description: 'Test the deployment'
     Value: !Sub |
-      curl -X POST ${FormHandlerUrl.FunctionUrl} \
+      curl -X POST ${FormHandler.FunctionUrl} \
         -H "Content-Type: application/json" \
         -H "X-Signature: $(echo -n "$(date +%s):{}" | openssl dgst -sha256 -hmac 'development-secret-change-in-production' | cut -d' ' -f2)" \
         -H "X-Timestamp: $(date +%s)" \
