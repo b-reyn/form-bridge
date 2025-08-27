@@ -130,7 +130,6 @@ jobs:
           cd ultra-simple
           sam build \
             --template-file template-minimal.yaml \
-            --use-container false \
             --cached \
             --parallel
             
