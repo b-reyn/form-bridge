@@ -248,7 +248,7 @@ jobs:
             --query 'Stacks[0].Outputs[*].[OutputKey,OutputValue]' \
             --output table
             
-      - name: WordPress plugin instructions
+      - name: Integration instructions
         run: |
           echo ""
           echo "🔌 WordPress Plugin Configuration:"
@@ -260,15 +260,28 @@ jobs:
           echo "define('FORM_BRIDGE_ENDPOINT', '$FUNCTION_URL');"
           echo "define('FORM_BRIDGE_SECRET', 'development-secret-change-in-production');"
           echo ""
-          echo "🧪 Test command:"
+          echo "📊 Admin Dashboard Access:"
+          echo "========================="
+          echo "Read API URL: $READ_FUNCTION_URL"
+          echo "Username: admin"
+          echo "Password: admin123"
+          echo ""
+          echo "🧪 Test Commands:"
+          echo "==============="
+          echo "# Form submission:"
           echo "curl -X POST $FUNCTION_URL \\"
           echo '  -H "Content-Type: application/json" \'
           echo '  -H "X-Signature: $(echo -n "$(date +%s):{\"form_data\":{\"name\":\"Test\",\"email\":\"test@example.com\"}}" | openssl dgst -sha256 -hmac "development-secret-change-in-production" | cut -d" " -f2)" \'
           echo '  -H "X-Timestamp: $(date +%s)" \'
           echo '  -d '"'"'{"form_data":{"name":"Test","email":"test@example.com"}}'"'"
           echo ""
+          echo "# Read submissions:"
+          echo "curl -X GET $READ_FUNCTION_URL \\"
+          echo '  -H "Authorization: Basic $(echo -n "admin:admin123" | base64)"'
+          echo ""
           echo "🔍 Monitor logs:"
           echo "aws logs tail /aws/lambda/form-bridge-ultra-${{ needs.validate.outputs.environment }} --follow"
+          echo "aws logs tail /aws/lambda/form-bridge-read-${{ needs.validate.outputs.environment }} --follow"
           
       - name: Create deployment summary
         if: success()
@@ -276,6 +289,7 @@ jobs:
         with:
           script: |
             const functionUrl = '${{ env.FUNCTION_URL }}';
+            const readFunctionUrl = '${{ env.READ_FUNCTION_URL }}';
             const stackName = '${{ env.STACK_NAME }}';
             const environment = '${{ needs.validate.outputs.environment }}';
             
@@ -284,7 +298,8 @@ jobs:
             ### Deployment Details
             - **Environment:** ${environment}
             - **Stack:** ${stackName}
-            - **Endpoint:** ${functionUrl}
+            - **Ingestion API:** ${functionUrl}
+            - **Read API:** ${readFunctionUrl}
             
             ### WordPress Plugin Config
             \`\`\`php
@@ -292,13 +307,23 @@ jobs:
             define('FORM_BRIDGE_SECRET', 'development-secret-change-in-production');
             \`\`\`
             
-            ### Quick Test
+            ### Admin Dashboard Access
+            - **URL:** ${readFunctionUrl}
+            - **Username:** admin
+            - **Password:** admin123
+            
+            ### Quick Tests
             \`\`\`bash
+            # Submit form
             curl -X POST ${functionUrl} \\
               -H "Content-Type: application/json" \\
               -H "X-Signature: \$(echo -n "\$(date +%s):{}" | openssl dgst -sha256 -hmac 'development-secret-change-in-production' | cut -d' ' -f2)" \\
               -H "X-Timestamp: \$(date +%s)" \\
               -d '{"form_data":{"test":"data"}}'
+              
+            # Read submissions
+            curl -X GET ${readFunctionUrl} \\
+              -H "Authorization: Basic \$(echo -n 'admin:admin123' | base64)"
             \`\`\`
             
             ### Cost Estimate

@@ -1,6 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Transform: AWS::Serverless-2016-10-31
-Description: 'Form-Bridge Ultra-Simple: Lambda + DynamoDB Only ($0/month for testing)'
+Description: 'Form-Bridge Ultra-Simple: Ingestion + Read API + DynamoDB ($0/month for testing)'
 
 Parameters:
   Environment:
@@ -8,10 +8,16 @@ Parameters:
     Default: test
     AllowedValues: [test, prod]
     Description: Deployment environment
+    
+  AdminPassword:
+    Type: String
+    Description: Admin password for read API dashboard authentication
+    Default: admin123
+    NoEcho: true
 
 Resources:
   # =========================================
-  # Single Lambda Function (Ultra-Optimized)
+  # Form Ingestion Lambda (Ultra-Optimized)
   # =========================================
   
   FormHandler:
@@ -52,6 +58,53 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DataTable
+            
+  # =========================================
+  # Read API Lambda Function (Admin Access)
+  # =========================================
+  
+  ReadHandler:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-read-${Environment}'
+      Description: 'Read form submissions API for admin dashboard'
+      CodeUri: ./
+      Handler: read-submissions.lambda_handler
+      Runtime: python3.12
+      # Optimized for read operations
+      MemorySize: 256          # More memory for data processing
+      Timeout: 30              # Allow more time for queries
+      Architectures:
+        - x86_64               # Match ingestion function
+      Environment:
+        Variables:
+          ENVIRONMENT: !Ref Environment
+          TABLE_NAME: !Ref DataTable
+          ADMIN_PASSWORD: !Ref AdminPassword
+      # Lambda Function URL for admin access
+      FunctionUrlConfig:
+        AuthType: NONE         # We handle basic auth in the function
+        InvokeMode: BUFFERED   # Synchronous
+        Cors:
+          AllowOrigins:
+            - '*'              # Restrict in production to admin domain
+          AllowMethods:
+            - GET
+            - POST
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+          MaxAge: 86400        # Cache preflight 24 hours
+      # Read-only IAM permissions
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+                - dynamodb:GetItem
+              Resource: !GetAtt DataTable.Arn
 
   # ===============================
   # Single DynamoDB Table (Minimal)
@@ -109,10 +162,16 @@ Resources:
 
 Outputs:
   LambdaFunctionUrl:
-    Description: 'WordPress plugin endpoint'
+    Description: 'WordPress plugin endpoint (ingestion)'
     Value: !GetAtt FormHandlerUrl.FunctionUrl
     Export:
       Name: !Sub '${AWS::StackName}-endpoint'
+      
+  ReadLambdaFunctionUrl:
+    Description: 'Admin dashboard endpoint (read API)'
+    Value: !GetAtt ReadHandlerUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-read-endpoint'
 
   DynamoDBTable:
     Description: 'Data storage table'
@@ -120,14 +179,30 @@ Outputs:
     Export:
       Name: !Sub '${AWS::StackName}-table'
 
-  TestCommand:
-    Description: 'Test the deployment'
+  TestIngestCommand:
+    Description: 'Test form submission'
     Value: !Sub |
       curl -X POST ${FormHandlerUrl.FunctionUrl} \
         -H "Content-Type: application/json" \
         -H "X-Signature: $(echo -n "$(date +%s):{}" | openssl dgst -sha256 -hmac 'development-secret-change-in-production' | cut -d' ' -f2)" \
         -H "X-Timestamp: $(date +%s)" \
         -d '{"form_data":{"test":"data"}}'
+        
+  TestReadCommand:
+    Description: 'Test reading submissions (admin)'
+    Value: !Sub |
+      curl -X GET ${ReadHandlerUrl.FunctionUrl} \
+        -H "Authorization: Basic $(echo -n 'admin:[PASSWORD]' | base64)"
+        
+  AdminDashboardInfo:
+    Description: 'Admin dashboard access'
+    Value: !Sub |
+      URL: [See ReadLambdaFunctionUrl output]
+      Username: admin
+      Password: [See AdminPassword parameter]
+      Endpoints:
+        - GET / (list submissions)
+        - GET /stats (statistics)
 
   CostEstimate:
     Description: 'Estimated monthly cost'
@@ -135,4 +210,4 @@ Outputs:
 
   ScalingInfo:
     Description: 'When to upgrade'
-    Value: 'Upgrade to full architecture at 10K+ requests/month or need admin UI'
+    Value: 'Upgrade to full architecture at 10K+ requests/month or advanced admin features'

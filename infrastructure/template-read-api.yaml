@@ -1,0 +1,177 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Form-Bridge Read API - Lambda function to read form submissions for admin dashboard'
+
+Parameters:
+  Environment:
+    Type: String
+    Default: test
+    AllowedValues: [test, prod]
+    Description: Deployment environment
+    
+  ExistingTableName:
+    Type: String
+    Description: Name of existing DynamoDB table (from main form-bridge stack)
+    Default: form-bridge-test
+    
+  AdminPassword:
+    Type: String
+    Description: Admin password for dashboard authentication
+    Default: admin123
+    NoEcho: true
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Timeout: 30
+    MemorySize: 256  # Slightly more memory for read operations
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        LOG_LEVEL: INFO
+
+Resources:
+  # ========================================
+  # Read Lambda Function with Function URL
+  # ========================================
+  
+  ReadSubmissionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'form-bridge-read-${Environment}'
+      Description: 'Read form submissions from DynamoDB for admin dashboard'
+      CodeUri: ../lambdas/
+      Handler: read-submissions.lambda_handler
+      # Use ARM64 for cost savings
+      Architectures:
+        - arm64
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref ExistingTableName
+          ADMIN_PASSWORD: !Ref AdminPassword
+      # Lambda Function URL - Direct HTTPS endpoint
+      FunctionUrlConfig:
+        AuthType: NONE  # We handle auth in the function
+        InvokeMode: BUFFERED  # Synchronous
+        Cors:
+          AllowOrigins:
+            - '*'  # Restrict in production to your domain
+          AllowMethods:
+            - GET
+            - OPTIONS
+          AllowHeaders:
+            - Content-Type
+            - Authorization
+          MaxAge: 86400
+      # Minimal permissions for DynamoDB read access
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Scan
+                - dynamodb:Query
+                - dynamodb:GetItem
+              Resource: !Sub 'arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${ExistingTableName}'
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+
+  # ===============================
+  # CloudWatch Log Group
+  # ===============================
+  
+  ReadLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/form-bridge-read-${Environment}'
+      RetentionInDays: 7  # Minimize log storage costs
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Service
+          Value: FormBridge-Read
+
+  # ===============================
+  # Basic CloudWatch Alarms
+  # ===============================
+  
+  ReadErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'FormBridge-Read-${Environment}-Errors'
+      AlarmDescription: 'Alert on read Lambda function errors'
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300  # 5 minutes
+      EvaluationPeriods: 1
+      Threshold: 3  # Alert after 3 errors
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ReadSubmissionsFunction
+      TreatMissingData: notBreaching
+
+  ReadThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'FormBridge-Read-${Environment}-Throttles'
+      AlarmDescription: 'Alert on read Lambda throttling'
+      MetricName: Throttles
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref ReadSubmissionsFunction
+
+# ===============================
+# Outputs
+# ===============================
+
+Outputs:
+  ReadLambdaFunctionUrl:
+    Description: 'Direct Lambda endpoint for reading form submissions (use this in admin UI)'
+    Value: !GetAtt ReadSubmissionsFunctionUrl.FunctionUrl
+    Export:
+      Name: !Sub '${AWS::StackName}-ReadFunctionUrl'
+
+  ReadFunctionArn:
+    Description: 'ARN of the read Lambda function'
+    Value: !GetAtt ReadSubmissionsFunction.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-ReadFunctionArn'
+
+  ReadFunctionName:
+    Description: 'Name of the read Lambda function'
+    Value: !Ref ReadSubmissionsFunction
+    Export:
+      Name: !Sub '${AWS::StackName}-ReadFunctionName'
+
+  ApiEndpoints:
+    Description: 'Available API endpoints'
+    Value: !Sub |
+      - GET ${ReadSubmissionsFunctionUrl.FunctionUrl} - List all submissions
+      - GET ${ReadSubmissionsFunctionUrl.FunctionUrl}stats - Get statistics
+      - Authentication: Basic admin:${AdminPassword}
+
+  EstimatedMonthlyCost:
+    Description: 'Estimated monthly cost for read API'
+    Value: '$0.00 - $0.10 (AWS Free Tier covers most read operations)'
+
+  UsageInstructions:
+    Description: 'How to use the read API'
+    Value: |
+      1. Use Basic Authentication with admin:password
+      2. GET requests only (submissions list and stats)
+      3. Supports pagination with limit and last_key parameters
+      4. CORS enabled for web dashboard integration

@@ -1,0 +1,11 @@
+# Minimal dependencies for read-submissions Lambda function
+# boto3 is already available in Lambda runtime environment
+# Only add dependencies if absolutely necessary for cost optimization
+
+# No additional dependencies needed - using only built-in Python libraries:
+# - json (built-in)
+# - base64 (built-in) 
+# - datetime (built-in)
+# - os (built-in)
+# - typing (built-in)
+# - boto3 (Lambda runtime)
