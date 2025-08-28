@@ -1,0 +1,62 @@
+version: '3.8'
+
+services:
+  wordpress:
+    image: wordpress:latest
+    container_name: form-bridge-wordpress
+    ports:
+      - "8080:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress_password
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DEBUG: 1
+      WORDPRESS_DEBUG_LOG: 1
+      WORDPRESS_DEBUG_DISPLAY: 0
+    volumes:
+      - wordpress_data:/var/www/html
+      - ./wordpress-plugin:/var/www/html/wp-content/plugins/form-bridge
+    depends_on:
+      - db
+    restart: unless-stopped
+    networks:
+      - wordpress_net
+
+  db:
+    image: mysql:8.0
+    container_name: form-bridge-mysql
+    environment:
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wordpress
+      MYSQL_PASSWORD: wordpress_password
+      MYSQL_ROOT_PASSWORD: root_password
+    volumes:
+      - db_data:/var/lib/mysql
+    ports:
+      - "3306:3306"
+    restart: unless-stopped
+    networks:
+      - wordpress_net
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: form-bridge-phpmyadmin
+    ports:
+      - "8081:80"
+    environment:
+      PMA_HOST: db
+      PMA_USER: root
+      PMA_PASSWORD: root_password
+    depends_on:
+      - db
+    networks:
+      - wordpress_net
+
+volumes:
+  wordpress_data:
+  db_data:
+
+networks:
+  wordpress_net:
+    driver: bridge
